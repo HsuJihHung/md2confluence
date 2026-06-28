@@ -1,0 +1,6 @@
+nicegui>=1.4.0
+markdown-to-confluence>=0.6.0
+confluence-markdown-exporter>=5.0.0
+python-frontmatter>=1.1.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
