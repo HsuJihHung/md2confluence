@@ -203,42 +203,42 @@ class MainLayout:
                 )
 
     def _do_upload(self, paths):
+        # Deferred to avoid importing service modules at UI module load time
         from services.upload_service import UploadService
         svc = UploadService(self.config, self.tracker)
+        log_widget = self._log_label  # capture now to avoid stale ref if user switches file
 
         def _cb(file, msg):
-            if self._log_label:
-                self._log_label.push(msg)
+            if log_widget:
+                log_widget.push(msg)
 
         async def _run():
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: svc.upload(paths, progress_callback=_cb))
+            await asyncio.get_running_loop().run_in_executor(None, lambda: svc.upload(paths, progress_callback=_cb))
             await self._refresh()
 
-        asyncio.ensure_future(_run())
+        asyncio.create_task(_run())
 
     def _do_pull(self, info):
-        if not info.confluence_url and not info.confluence_id:
-            ui.notify("No Confluence URL linked to this file", type="warning")
+        if not info.confluence_url:
+            ui.notify("No Confluence URL — use Change ID to set one first", type="warning")
             return
+        # Deferred to avoid importing service modules at UI module load time
         from services.download_service import DownloadService, DownloadScope
         svc = DownloadService(self.config, self.tracker)
 
         def _cb(msg):
-            if self._log_label:
-                self._log_label.push(msg)
+            if log_widget := self._log_label:
+                log_widget.push(msg)
 
         async def _run():
-            url = info.confluence_url or info.confluence_id
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
+            await asyncio.get_running_loop().run_in_executor(
                 None,
-                lambda: svc.download(url, DownloadScope.SINGLE, info.path.parent,
+                lambda: svc.download(info.confluence_url, DownloadScope.SINGLE, info.path.parent,
                                       overwrite=True, progress_callback=_cb),
             )
             await self._refresh()
 
-        asyncio.ensure_future(_run())
+        asyncio.create_task(_run())
 
     def _change_id_dialog(self, info):
         with ui.dialog() as dlg, ui.card():
@@ -252,7 +252,7 @@ class MainLayout:
                         "confluence_space": self.config.default_space,
                     })
                     dlg.close()
-                    asyncio.ensure_future(self._refresh())
+                    asyncio.create_task(self._refresh())
                     ui.notify("Confluence ID updated", type="positive")
 
             with ui.row().classes("gap-2 justify-end w-full mt-2"):
@@ -260,7 +260,9 @@ class MainLayout:
                 ui.button("Save", on_click=_apply).classes("bg-indigo-600 text-white")
         dlg.open()
 
-    def _open_download_dialog(self): pass
+    def _open_download_dialog(self):
+        from ui.download_dialog import open_download_dialog
+        open_download_dialog(self.config, self.tracker, default_dir=self.config.last_directory)
 
     def _rebuild_file_list(self):
         if self._file_list_container:
@@ -286,8 +288,7 @@ class MainLayout:
         directory = self._dir_input.value.strip()
         if not directory:
             return
-        loop = asyncio.get_event_loop()
-        self.files = await loop.run_in_executor(None, self.tracker.scan, Path(directory))
+        self.files = await asyncio.get_running_loop().run_in_executor(None, self.tracker.scan, Path(directory))
         counts = {"synced": 0, "modified_locally": 0, "not_linked": 0, "failed": 0}
         for f in self.files:
             counts[f.status.value] += 1
