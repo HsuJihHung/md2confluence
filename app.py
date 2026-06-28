@@ -1,9 +1,27 @@
 from nicegui import ui
+from services.confluence_config import ConfluenceConfig
+from services.file_tracker import FileTracker
+from ui.main_layout import MainLayout
+from ui.config_page import build_config_page
+
+config = ConfluenceConfig()
+tracker = FileTracker()
+
+
+@ui.page("/")
+def index():
+    layout = MainLayout(config, tracker)
+    layout.build()
+
+
+@ui.page("/config")
+def config_page():
+    build_config_page(config)
+
 
 def main():
-    ui.label("md2confluence — starting up")
-    # port=0 lets the OS assign a free port, avoiding conflicts with other local services
-    ui.run(title="md2confluence", port=0, reload=False)
+    ui.run(title="md2confluence", port=0, reload=False, dark=config.theme == "dark")
+
 
 if __name__ == "__main__":
     main()
