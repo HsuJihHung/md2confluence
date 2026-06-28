@@ -64,3 +64,40 @@ def test_as_env_dict_server(tmp_path):
     assert env["CONFLUENCE_USER_NAME"] == "jsmith"
     assert env["CONFLUENCE_API_KEY"] == "pass"
     assert env["CONFLUENCE_SPACE_KEY"] == "DEV"
+
+
+def test_as_env_dict_server_pat_takes_priority(tmp_path):
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    cfg.deployment = DeploymentType.SERVER
+    cfg.server_url = "https://confluence.co.com"
+    cfg.server_username = "jsmith"
+    cfg.server_password = "password"
+    cfg.server_pat = "my-pat-token"
+    env = cfg.as_env_dict()
+    assert env["CONFLUENCE_API_KEY"] == "my-pat-token"
+
+
+def test_load_ignores_unknown_keys(tmp_path):
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text('{"bogus_key": "value", "cloud_domain": "test.atlassian.net"}', encoding="utf-8")
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    assert cfg.cloud_domain == "test.atlassian.net"  # known key loaded
+    assert not hasattr(cfg, "bogus_key")  # unknown key ignored
+
+
+def test_load_handles_corrupted_json(tmp_path):
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text("{ not valid json !!!", encoding="utf-8")
+    cfg = ConfluenceConfig(config_dir=tmp_path)  # should not raise
+    assert cfg.deployment == DeploymentType.CLOUD  # falls back to defaults
+
+
+def test_save_and_load_server_credentials(tmp_path):
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    cfg.deployment = DeploymentType.SERVER
+    cfg.server_username = "jsmith"
+    cfg.server_password = "mypassword"
+    cfg.save()
+    cfg2 = ConfluenceConfig(config_dir=tmp_path)
+    assert cfg2.server_username == "jsmith"
+    assert cfg2.server_password == "mypassword"

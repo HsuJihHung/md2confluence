@@ -48,19 +48,33 @@ class ConfluenceConfig:
     def _load(self):
         if not self._settings_file.exists():
             return
-        data = json.loads(self._settings_file.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(self._settings_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return  # fall back to defaults if file is corrupted
         for key, value in data.items():
-            if key == "deployment":
-                value = DeploymentType(value)
-            if hasattr(self, key) and key != "config_dir":
-                setattr(self, key, value)
+            try:
+                if key == "deployment":
+                    value = DeploymentType(value)
+                if hasattr(self, key) and key != "config_dir":
+                    setattr(self, key, value)
+            except ValueError:
+                pass  # skip invalid enum values, keep default
 
     def save(self):
+        import os
+        import sys
         self.config_dir.mkdir(parents=True, exist_ok=True)
         data = {k: v for k, v in asdict(self).items() if k != "config_dir"}
-        self._settings_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp = self._settings_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, self._settings_file)
+        if sys.platform != "win32":
+            import stat
+            self._settings_file.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — owner read/write only
 
     def as_env_dict(self) -> dict[str, str]:
+        # default_parent_page_id is passed separately as a CLI flag, not an env var
         if self.deployment == DeploymentType.CLOUD:
             return {
                 "CONFLUENCE_DOMAIN": self.cloud_domain,
