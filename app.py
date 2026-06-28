@@ -10,17 +10,27 @@ tracker = FileTracker()
 
 @ui.page("/")
 def index():
+    dark = ui.dark_mode()
+    if config.theme == "dark":
+        dark.enable()
+    else:
+        dark.disable()
     layout = MainLayout(config, tracker)
     layout.build()
 
 
 @ui.page("/config")
 def config_page():
+    dark = ui.dark_mode()
+    if config.theme == "dark":
+        dark.enable()
+    else:
+        dark.disable()
     build_config_page(config)
 
 
 def main():
-    ui.run(title="md2confluence", port=0, reload=False, dark=config.theme == "dark")
+    ui.run(title="md2confluence", port=0, reload=False)
 
 
 if __name__ == "__main__":
