@@ -17,6 +17,7 @@ class MainLayout:
         self._file_list_container = None
         self._status_label = None
         self._dir_input = None
+        self._current_view: str = getattr(config, "default_view", "flat")
 
     def build(self):
         with ui.header().classes("items-center gap-2 px-4 py-2 bg-gray-900"):
@@ -62,9 +63,10 @@ class MainLayout:
 
             self._render_flat_list()
             self._render_tree_list()
-            self._set_view(self.config.default_view)
+            self._set_view(self._current_view)
 
     def _set_view(self, view: str):
+        self._current_view = view
         self._flat_container.set_visibility(view == "flat")
         self._tree_container.set_visibility(view == "tree")
 
@@ -125,23 +127,150 @@ class MainLayout:
 
     def _select_file(self, info: "FileInfo"):
         self.selected_file = info
+        # Full re-render is acceptable for the expected scale (< ~500 files).
         self._rebuild_file_list()
         self._rebuild_detail()
 
-    def _build_detail_panel(self): pass
+    def _build_detail_panel(self):
+        if not self.selected_file:
+            with self._detail_container:
+                with ui.column().classes("w-full h-full items-center justify-center"):
+                    ui.label("Select a file to view details").classes("text-gray-500 text-sm")
+            return
+
+        info = self.selected_file
+        status_colors = {
+            "synced": ("text-green-400", "bg-green-950"),
+            "modified_locally": ("text-orange-400", "bg-orange-950"),
+            "not_linked": ("text-gray-400", "bg-gray-800"),
+            "failed": ("text-red-400", "bg-red-950"),
+        }
+        txt_color, badge_bg = status_colors.get(info.status.value, ("text-gray-400", "bg-gray-800"))
+
+        with self._detail_container:
+            with ui.column().classes("w-full gap-3"):
+                # Header: filename + status badge
+                with ui.row().classes("w-full items-start justify-between"):
+                    with ui.column().classes("gap-0.5"):
+                        ui.label(info.path.name).classes("text-white text-lg font-bold")
+                        ui.label(str(info.path)).classes("text-gray-500 text-xs")
+                    ui.label(f"● {info.status.value.replace('_', ' ')}").classes(
+                        f"text-xs px-3 py-1 rounded-full {txt_color} {badge_bg} whitespace-nowrap"
+                    )
+
+                # Confluence info card
+                with ui.card().classes("w-full bg-gray-900"):
+                    ui.label("Confluence").classes("text-xs text-gray-500 uppercase mb-2")
+                    if info.confluence_id:
+                        with ui.grid(columns=2).classes("w-full text-xs gap-y-1.5"):
+                            ui.label("Page name").classes("text-gray-500")
+                            ui.label(info.confluence_page_name or "—").classes("text-white font-bold")
+                            ui.label("Page ID").classes("text-gray-500")
+                            ui.label(info.confluence_id).classes("text-indigo-400")
+                            ui.label("Space").classes("text-gray-500")
+                            ui.label(info.confluence_space or "—").classes("text-gray-300")
+                            ui.label("Last sync").classes("text-gray-500")
+                            ui.label(info.confluence_last_sync or "—").classes("text-gray-300")
+                            ui.label("Open").classes("text-gray-500")
+                            if info.confluence_url:
+                                ui.link("View in Confluence ↗", target=info.confluence_url, new_tab=True).classes(
+                                    "text-indigo-400 text-xs"
+                                )
+                            else:
+                                ui.label("—").classes("text-gray-500")
+                    else:
+                        ui.label("Not linked to a Confluence page yet.").classes("text-gray-500 text-xs")
+
+                # Action buttons
+                with ui.row().classes("gap-2 flex-wrap"):
+                    ui.button(
+                        "⬆ Upload to Confluence",
+                        on_click=lambda: self._do_upload([info.path]),
+                    ).classes("bg-indigo-600 text-white text-xs")
+                    ui.button(
+                        "⬇ Pull from Confluence",
+                        on_click=lambda: self._do_pull(info),
+                    ).props("outline").classes("text-xs")
+                    ui.button(
+                        "🔗 Change ID…",
+                        on_click=lambda: self._change_id_dialog(info),
+                    ).props("outline").classes("text-xs")
+
+                # Operation log
+                ui.label("Last Operation Log").classes("text-xs text-gray-500 uppercase")
+                self._log_label = ui.log(max_lines=20).classes(
+                    "w-full h-32 bg-gray-950 text-xs font-mono rounded border border-gray-800"
+                )
+
+    def _do_upload(self, paths):
+        from services.upload_service import UploadService
+        svc = UploadService(self.config, self.tracker)
+
+        def _cb(file, msg):
+            if self._log_label:
+                self._log_label.push(msg)
+
+        async def _run():
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: svc.upload(paths, progress_callback=_cb))
+            await self._refresh()
+
+        asyncio.ensure_future(_run())
+
+    def _do_pull(self, info):
+        if not info.confluence_url and not info.confluence_id:
+            ui.notify("No Confluence URL linked to this file", type="warning")
+            return
+        from services.download_service import DownloadService, DownloadScope
+        svc = DownloadService(self.config, self.tracker)
+
+        def _cb(msg):
+            if self._log_label:
+                self._log_label.push(msg)
+
+        async def _run():
+            url = info.confluence_url or info.confluence_id
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: svc.download(url, DownloadScope.SINGLE, info.path.parent,
+                                      overwrite=True, progress_callback=_cb),
+            )
+            await self._refresh()
+
+        asyncio.ensure_future(_run())
+
+    def _change_id_dialog(self, info):
+        with ui.dialog() as dlg, ui.card():
+            ui.label("Set Confluence Page ID").classes("font-bold")
+            new_id = ui.input("Page ID", placeholder="e.g. 98321").classes("w-full")
+
+            def _apply():
+                if new_id.value.strip():
+                    self.tracker.write_sync_state(info.path, {
+                        "confluence_id": new_id.value.strip(),
+                        "confluence_space": self.config.default_space,
+                    })
+                    dlg.close()
+                    asyncio.ensure_future(self._refresh())
+                    ui.notify("Confluence ID updated", type="positive")
+
+            with ui.row().classes("gap-2 justify-end w-full mt-2"):
+                ui.button("Cancel", on_click=dlg.close).props("flat")
+                ui.button("Save", on_click=_apply).classes("bg-indigo-600 text-white")
+        dlg.open()
+
     def _open_download_dialog(self): pass
 
     def _rebuild_file_list(self):
         if self._file_list_container:
             self._file_list_container.clear()
-            with self._file_list_container:
-                self._build_file_panel()
+            self._build_file_panel()
 
     def _rebuild_detail(self):
         if self._detail_container:
             self._detail_container.clear()
-            with self._detail_container:
-                self._build_detail_panel()
+            self._build_detail_panel()
 
     async def _browse(self):
         result = await ui.run_javascript(
