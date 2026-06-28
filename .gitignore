@@ -5,3 +5,9 @@ dist/
 build/
 .env
 .DS_Store
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+htmlcov/
