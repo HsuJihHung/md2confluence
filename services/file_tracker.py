@@ -1,4 +1,5 @@
 import hashlib
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -12,7 +13,7 @@ class SyncStatus(str, Enum):
     SYNCED = "synced"
     MODIFIED_LOCALLY = "modified_locally"
     NOT_LINKED = "not_linked"
-    FAILED = "failed"
+    FAILED = "failed"  # set by UploadService/DownloadService on error, not by scan()
 
 
 @dataclass
@@ -60,20 +61,36 @@ class FileTracker:
         try:
             post = fm_lib.load(str(path))
         except Exception:
-            post = fm_lib.Post(path.read_text(encoding="utf-8"))
+            # File has no parseable frontmatter — start fresh with empty metadata
+            post = fm_lib.Post(self._strip_frontmatter_manually(path.read_text(encoding="utf-8")))
         post.metadata.update({
             **page_info,
-            "confluence_last_sync": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-            "confluence_content_hash": f"sha256:{self.compute_body_hash(path)}",
+            "confluence_last_sync": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "confluence_content_hash": f"sha256:{self.compute_body_hash_from_text(post.content)}",
         })
-        path.write_text(fm_lib.dumps(post), encoding="utf-8")
+        # Atomic write: write to temp then rename
+        tmp = path.with_suffix(".md.tmp")
+        tmp.write_text(fm_lib.dumps(post), encoding="utf-8")
+        os.replace(tmp, path)
 
     def compute_body_hash(self, path: Path) -> str:
         try:
             body = fm_lib.load(str(path)).content
         except Exception:
-            body = path.read_text(encoding="utf-8")
+            # If frontmatter parsing fails, treat the whole file as body
+            # (no frontmatter to strip) rather than risking a corrupt hash
+            body = self._strip_frontmatter_manually(path.read_text(encoding="utf-8"))
         return self.compute_body_hash_from_text(body)
+
+    def _strip_frontmatter_manually(self, text: str) -> str:
+        """Strip leading frontmatter block (--- ... ---) if present, else return as-is."""
+        lines = text.splitlines(keepends=True)
+        if not lines or lines[0].strip() != "---":
+            return text
+        for i, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                return "".join(lines[i + 1:])
+        return text  # no closing --- found, treat whole file as body
 
     def compute_body_hash_from_text(self, body: str) -> str:
         return hashlib.sha256(body.encode("utf-8")).hexdigest()

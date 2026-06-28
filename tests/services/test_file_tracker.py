@@ -69,3 +69,47 @@ def test_body_hash_excludes_frontmatter(tmp_path):
     _write_md(path, body, {"confluence_id": "123"})
     tracker = FileTracker()
     assert tracker.compute_body_hash(path) == tracker.compute_body_hash_from_text(body)
+
+
+def test_write_sync_state_preserves_body(tmp_path):
+    path = tmp_path / "a.md"
+    body = "# My Document\n\nSome content here."
+    path.write_text(body, encoding="utf-8")
+    tracker = FileTracker()
+    tracker.write_sync_state(path, {"confluence_id": "789", "confluence_space": "TEAM"})
+    # Body must survive the frontmatter write
+    post = __import__("frontmatter").load(str(path))
+    assert "# My Document" in post.content
+    assert "Some content here" in post.content
+
+
+def test_write_sync_state_merges_existing_frontmatter(tmp_path):
+    path = tmp_path / "a.md"
+    _write_md(path, "# Hello", {"confluence_id": "123", "confluence_space": "OLD"})
+    tracker = FileTracker()
+    tracker.write_sync_state(path, {"confluence_id": "123", "confluence_space": "NEW"})
+    fm = tracker.read_frontmatter(path)
+    assert fm["confluence_space"] == "NEW"
+    assert fm["confluence_id"] == "123"
+
+
+def test_write_sync_state_is_idempotent(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("# Hello", encoding="utf-8")
+    tracker = FileTracker()
+    tracker.write_sync_state(path, {"confluence_id": "111"})
+    results = tracker.scan(tmp_path)
+    assert results[0].status == SyncStatus.SYNCED
+
+
+def test_scan_empty_file(tmp_path):
+    (tmp_path / "empty.md").write_text("", encoding="utf-8")
+    results = FileTracker().scan(tmp_path)
+    assert results[0].status == SyncStatus.NOT_LINKED
+
+
+def test_read_frontmatter_malformed_yaml(tmp_path):
+    path = tmp_path / "bad.md"
+    path.write_text("---\n: invalid: yaml: :\n---\n# Body", encoding="utf-8")
+    fm = FileTracker().read_frontmatter(path)
+    assert isinstance(fm, dict)  # never raises, returns {} or partial
