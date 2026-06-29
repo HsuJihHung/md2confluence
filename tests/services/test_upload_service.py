@@ -29,6 +29,7 @@ def test_upload_calls_subprocess(tmp_path):
     assert mock_run.called
     cmd_args = mock_run.call_args[0][0]
     assert str(path) in cmd_args
+    assert "--no-generated-by" in cmd_args
     assert results[0][1] is True  # success
 
 
@@ -87,3 +88,19 @@ def test_progress_callback_called(tmp_path):
         UploadService(cfg, MagicMock()).upload([path], progress_callback=lambda f, m: calls.append(m))
 
     assert len(calls) == 2
+
+
+def test_upload_with_macro_options(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("# Hello", encoding="utf-8")
+    cfg = _make_cfg(tmp_path)
+    cfg.mermaid_mode = "macro"
+    cfg.plantuml_mode = "macro"
+
+    with patch("services.upload_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Page ID: 111\n", stderr="")
+        UploadService(cfg, MagicMock()).upload([path])
+
+    cmd_args = mock_run.call_args[0][0]
+    assert "--no-render-mermaid" in cmd_args
+    assert "--no-render-plantuml" in cmd_args

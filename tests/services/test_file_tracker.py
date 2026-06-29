@@ -113,3 +113,18 @@ def test_read_frontmatter_malformed_yaml(tmp_path):
     path.write_text("---\n: invalid: yaml: :\n---\n# Body", encoding="utf-8")
     fm = FileTracker().read_frontmatter(path)
     assert isinstance(fm, dict)  # never raises, returns {} or partial
+
+
+def test_write_sync_state_updates_comments(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("<!-- confluence-page-id: 123 -->\n<!-- confluence-space-key: OLD -->\n# My Body", encoding="utf-8")
+    tracker = FileTracker()
+    tracker.write_sync_state(path, {"confluence_id": "456", "confluence_space": "NEW"})
+    
+    content = path.read_text(encoding="utf-8")
+    assert "<!-- confluence-page-id: 456 -->" in content
+    assert "<!-- confluence-space-key: NEW -->" in content
+    assert "<!-- confluence-page-id: 123 -->" not in content
+    assert "<!-- confluence-space-key: OLD -->" not in content
+    assert "# My Body" in content
+

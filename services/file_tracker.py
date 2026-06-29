@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -63,6 +64,28 @@ class FileTracker:
         except Exception:
             # File has no parseable frontmatter — start fresh with empty metadata
             post = fm_lib.Post(self._strip_frontmatter_manually(path.read_text(encoding="utf-8")))
+
+        _PAGE_ID_REGEXP = re.compile(r"<!--\s+confluence[-_]page[-_]id:\s*(\d+)\s+-->")
+        _SPACE_KEY_REGEXP = re.compile(r"<!--\s+confluence[-_]space[-_]key:\s*(\S+)\s+-->")
+
+        cid = page_info.get("confluence_id")
+        space = page_info.get("confluence_space")
+
+        content = post.content
+        if cid:
+            if _PAGE_ID_REGEXP.search(content):
+                content = _PAGE_ID_REGEXP.sub(f"<!-- confluence-page-id: {cid} -->", content)
+            else:
+                content = f"<!-- confluence-page-id: {cid} -->\n" + content
+
+        if space:
+            if _SPACE_KEY_REGEXP.search(content):
+                content = _SPACE_KEY_REGEXP.sub(f"<!-- confluence-space-key: {space} -->", content)
+            else:
+                content = f"<!-- confluence-space-key: {space} -->\n" + content
+
+        post.content = content
+
         post.metadata.update({
             **page_info,
             "confluence_last_sync": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

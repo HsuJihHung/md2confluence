@@ -29,7 +29,7 @@ class ConfluenceConfig:
     default_space: str = ""
 
     mermaid_mode: str = "local"       # "local" | "macro"
-    plantuml_mode: str = "remote"     # "remote" | "local"
+    plantuml_mode: str = "remote"     # "remote" | "local" | "macro"
     plantuml_server: str = "https://www.plantuml.com/plantuml"
 
     default_parent_page_id: str = ""
@@ -76,20 +76,26 @@ class ConfluenceConfig:
     def as_env_dict(self) -> dict[str, str]:
         # default_parent_page_id is passed separately as a CLI flag, not an env var
         if self.deployment == DeploymentType.CLOUD:
-            return {
+            res = {
                 "CONFLUENCE_DOMAIN": self.cloud_domain,
                 "CONFLUENCE_PATH": "",
                 "CONFLUENCE_USER_NAME": self.cloud_email,
                 "CONFLUENCE_API_KEY": self.cloud_api_token,
                 "CONFLUENCE_SPACE_KEY": self.default_space,
+                "CONFLUENCE_API_VERSION": "v2",
             }
-        parsed = urlparse(self.server_url)
-        domain = parsed.netloc or self.server_url
-        password = self.server_pat or self.server_password
-        return {
-            "CONFLUENCE_DOMAIN": domain,
-            "CONFLUENCE_PATH": self.server_context_path,
-            "CONFLUENCE_USER_NAME": self.server_username,
-            "CONFLUENCE_API_KEY": password,
-            "CONFLUENCE_SPACE_KEY": self.default_space,
-        }
+        else:
+            parsed = urlparse(self.server_url)
+            domain = parsed.netloc or self.server_url
+            password = self.server_pat or self.server_password
+            res = {
+                "CONFLUENCE_DOMAIN": domain,
+                "CONFLUENCE_PATH": self.server_context_path,
+                "CONFLUENCE_USER_NAME": self.server_username,
+                "CONFLUENCE_API_KEY": password,
+                "CONFLUENCE_SPACE_KEY": self.default_space,
+                "CONFLUENCE_API_VERSION": "v1",
+            }
+        if self.plantuml_server:
+            res["PLANTUML_SERVER"] = self.plantuml_server
+        return res

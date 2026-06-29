@@ -4,11 +4,11 @@ from services.confluence_config import ConfluenceConfig, DeploymentType
 
 def build_config_page(config: ConfluenceConfig):
     with ui.column().classes("w-full max-w-2xl mx-auto p-6 gap-4"):
-        ui.label("Configuration").classes("text-xl font-bold text-indigo-400")
+        ui.label("Configuration").classes("text-xl font-bold text-indigo-600 dark:text-indigo-400")
 
         # --- Connection ---
         with ui.card().classes("w-full"):
-            ui.label("Confluence Connection").classes("font-bold text-indigo-300 mb-2")
+            ui.label("Confluence Connection").classes("font-bold text-indigo-600 dark:text-indigo-300 mb-2")
 
             deployment_toggle = ui.toggle(
                 {DeploymentType.CLOUD: "Cloud", DeploymentType.SERVER: "Server / DC"},
@@ -19,7 +19,7 @@ def build_config_page(config: ConfluenceConfig):
             server_section = ui.column().classes("w-full gap-2")
 
             with cloud_section:
-                ui.label("Cloud Settings").classes("text-xs text-gray-400 uppercase mt-2")
+                ui.label("Cloud Settings").classes("text-xs text-gray-600 dark:text-gray-400 uppercase mt-2")
                 cloud_domain = ui.input("Domain", value=config.cloud_domain,
                                         placeholder="yourcompany.atlassian.net").classes("w-full")
                 cloud_email = ui.input("Email", value=config.cloud_email).classes("w-full")
@@ -27,7 +27,7 @@ def build_config_page(config: ConfluenceConfig):
                                        password=True, password_toggle_button=True).classes("w-full")
 
             with server_section:
-                ui.label("Server Settings").classes("text-xs text-gray-400 uppercase mt-2")
+                ui.label("Server Settings").classes("text-xs text-gray-600 dark:text-gray-400 uppercase mt-2")
                 server_url = ui.input("Server URL", value=config.server_url,
                                       placeholder="https://confluence.yourcompany.com").classes("w-full")
                 server_path = ui.input("Context Path", value=config.server_context_path,
@@ -50,35 +50,35 @@ def build_config_page(config: ConfluenceConfig):
             conn_status = ui.label("").classes("text-xs mt-2")
 
             def _test_connection():
-                conn_status.classes(replace="text-xs mt-2 text-yellow-400")
+                conn_status.classes(replace="text-xs mt-2 text-yellow-600 dark:text-yellow-400")
                 conn_status.set_text("Testing...")
                 domain = cloud_domain.value if deployment_toggle.value == DeploymentType.CLOUD else server_url.value
                 if domain:
                     conn_status.set_text("Fields look valid — test by uploading a file")
-                    conn_status.classes(replace="text-xs mt-2 text-green-400")
+                    conn_status.classes(replace="text-xs mt-2 text-green-600 dark:text-green-400")
                 else:
                     conn_status.set_text("Domain/URL is required")
-                    conn_status.classes(replace="text-xs mt-2 text-red-400")
+                    conn_status.classes(replace="text-xs mt-2 text-red-600 dark:text-red-400")
 
             ui.button("Test Connection", on_click=_test_connection).classes("mt-2")
 
         # --- Diagram Rendering ---
         with ui.card().classes("w-full"):
-            ui.label("Diagram Rendering").classes("font-bold text-indigo-300 mb-2")
+            ui.label("Diagram Rendering").classes("font-bold text-indigo-600 dark:text-indigo-300 mb-2")
             mermaid_toggle = ui.toggle(
                 {"local": "Render locally (mmdc)", "macro": "Confluence macro"},
                 value=config.mermaid_mode,
             )
-            ui.label("Local rendering requires @mermaid-js/mermaid-cli (npm)").classes("text-xs text-gray-500")
+            ui.label("Local rendering requires @mermaid-js/mermaid-cli (npm)").classes("text-xs text-gray-600 dark:text-gray-500")
             plantuml_toggle = ui.toggle(
-                {"remote": "Remote server", "local": "Local jar"},
+                {"remote": "Remote server", "local": "Local jar", "macro": "Confluence macro"},
                 value=config.plantuml_mode,
             ).classes("mt-2")
             plantuml_server_input = ui.input("PlantUML Server URL", value=config.plantuml_server).classes("w-full mt-1")
 
         # --- Upload Defaults ---
         with ui.card().classes("w-full"):
-            ui.label("Upload Defaults").classes("font-bold text-indigo-300 mb-2")
+            ui.label("Upload Defaults").classes("font-bold text-indigo-600 dark:text-indigo-300 mb-2")
             parent_page = ui.input("Default Parent Page ID (optional)",
                                    value=config.default_parent_page_id).classes("w-full")
             skip_title = ui.checkbox("Remove H1 that duplicates page title",
@@ -88,7 +88,7 @@ def build_config_page(config: ConfluenceConfig):
 
         # --- App Preferences ---
         with ui.card().classes("w-full"):
-            ui.label("App Preferences").classes("font-bold text-indigo-300 mb-2")
+            ui.label("App Preferences").classes("font-bold text-indigo-600 dark:text-indigo-300 mb-2")
             theme_toggle = ui.toggle({"dark": "Dark", "light": "Light"}, value=config.theme)
             view_toggle = ui.toggle({"flat": "Flat list", "tree": "Tree view"},
                                     value=config.default_view).classes("mt-2")

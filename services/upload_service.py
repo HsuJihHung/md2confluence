@@ -32,7 +32,7 @@ class UploadService:
             callback(str(path), f"Uploading {path.name}...")
 
         cmd = self._build_cmd(path)
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
@@ -60,6 +60,14 @@ class UploadService:
             cmd.append("--skip-title-heading")
         if self.config.mermaid_mode == "local":
             cmd.append("--render-mermaid")
+        elif self.config.mermaid_mode == "macro":
+            cmd.append("--no-render-mermaid")
+        
+        if self.config.plantuml_mode == "macro":
+            cmd.append("--no-render-plantuml")
+
+        cmd.append("--no-force-valid-url")
+        cmd.append("--no-generated-by")
         return cmd
 
     def _parse_page_info(self, stdout: str) -> dict | None:
