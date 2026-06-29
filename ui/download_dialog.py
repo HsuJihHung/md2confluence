@@ -58,26 +58,29 @@ def open_download_dialog(config: ConfluenceConfig, tracker: FileTracker, default
             progress_log.set_visibility(True)
             svc = DownloadService(config, tracker)
 
-            def _cb(msg):
-                progress_log.push(msg)
+            def _cb(msg: str) -> None:
+                asyncio.get_event_loop().call_soon_threadsafe(progress_log.push, msg)
 
             async def _run():
-                ok, msg = await asyncio.get_running_loop().run_in_executor(
-                    None,
-                    lambda: svc.download(
-                        page_url=url,
-                        scope=scope_radio.value,
-                        target_dir=Path(target),
-                        overwrite=opt_overwrite.value,
-                        download_attachments=opt_attachments.value,
-                        write_frontmatter=opt_frontmatter.value,
-                        progress_callback=_cb,
-                    ),
-                )
-                if ok:
-                    ui.notify("Download complete", type="positive")
-                else:
-                    ui.notify(f"Download failed: {msg}", type="negative")
+                try:
+                    ok, msg = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: svc.download(
+                            page_url=url,
+                            scope=scope_radio.value,
+                            target_dir=Path(target),
+                            overwrite=opt_overwrite.value,
+                            download_attachments=opt_attachments.value,
+                            write_frontmatter=opt_frontmatter.value,
+                            progress_callback=_cb,
+                        ),
+                    )
+                    if ok:
+                        ui.notify("Download complete", type="positive")
+                    else:
+                        ui.notify(f"Download failed: {msg}", type="negative")
+                except Exception as exc:
+                    ui.notify(f"Unexpected error: {exc}", type="negative")
 
             asyncio.create_task(_run())
 

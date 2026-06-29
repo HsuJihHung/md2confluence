@@ -40,16 +40,20 @@ class UploadService:
                 callback(str(path), f"x {msg}")
             return path, False, msg
 
-        page_info = self._parse_page_info(result.stdout, path)
+        page_info = self._parse_page_info(result.stdout)
         if page_info:
-            self.tracker.write_sync_state(path, page_info)
+            try:
+                self.tracker.write_sync_state(path, page_info)
+            except Exception as e:
+                if callback:
+                    callback(str(path), f"⚠ Uploaded but failed to save sync state: {e}")
 
         if callback:
             callback(str(path), f"Uploaded {path.name}")
         return path, True, result.stdout
 
     def _build_cmd(self, path: Path) -> list[str]:
-        exe = shutil.which("md2conf") or None
+        exe = shutil.which("md2conf")
         base = [exe] if exe else [sys.executable, "-m", "md2conf"]
         cmd = base + [str(path)]
         if self.config.skip_title_heading:
@@ -58,7 +62,7 @@ class UploadService:
             cmd.append("--render-mermaid")
         return cmd
 
-    def _parse_page_info(self, stdout: str, path: Path) -> dict | None:
+    def _parse_page_info(self, stdout: str) -> dict | None:
         # md2conf prints "Page ID: <id>" on success.
         # Adjust this parser if the actual output format differs.
         for line in stdout.splitlines():

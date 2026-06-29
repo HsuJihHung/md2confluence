@@ -57,7 +57,23 @@ def test_upload_calls_write_sync_state_on_success(tmp_path):
         mock_run.return_value = MagicMock(returncode=0, stdout="Page ID: 999\n", stderr="")
         UploadService(cfg, tracker).upload([path])
 
-    tracker.write_sync_state.assert_called_once()
+    tracker.write_sync_state.assert_called_once_with(
+        path, {"confluence_id": "999", "confluence_space": "TEAM"}
+    )
+
+
+def test_upload_success_without_page_id_does_not_call_tracker(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("# Hello", encoding="utf-8")
+    cfg = _make_cfg(tmp_path)
+    tracker = MagicMock(spec=FileTracker)
+
+    with patch("services.upload_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Done.\n", stderr="")
+        results = UploadService(cfg, tracker).upload([path])
+
+    tracker.write_sync_state.assert_not_called()
+    assert results[0][1] is True
 
 
 def test_progress_callback_called(tmp_path):
@@ -70,4 +86,4 @@ def test_progress_callback_called(tmp_path):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         UploadService(cfg, MagicMock()).upload([path], progress_callback=lambda f, m: calls.append(m))
 
-    assert len(calls) >= 1
+    assert len(calls) == 2

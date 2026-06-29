@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import subprocess
@@ -8,6 +9,8 @@ from typing import Callable
 
 from services.confluence_config import ConfluenceConfig
 from services.file_tracker import FileTracker
+
+_log = logging.getLogger(__name__)
 
 
 class DownloadScope(str, Enum):
@@ -57,10 +60,14 @@ class DownloadService:
         return base + [subcommand, url, "--output-dir", str(target_dir)]
 
     def _write_frontmatter_for_new_files(self, target_dir: Path, source_url: str) -> None:
+        # cme may write confluence_id into frontmatter during export.
+        # For files where it doesn't, we write confluence_url only.
+        # Those files will appear as NOT_LINKED in scan() until the
+        # user assigns a confluence_id via "Change ID…".
         for path in target_dir.rglob("*.md"):
             fm = self.tracker.read_frontmatter(path)
             if not fm.get("confluence_id"):
                 try:
                     self.tracker.write_sync_state(path, {"confluence_url": source_url})
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.warning("Failed to write frontmatter for %s: %s", path, exc)

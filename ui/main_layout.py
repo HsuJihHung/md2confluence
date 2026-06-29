@@ -210,11 +210,14 @@ class MainLayout:
 
         def _cb(file, msg):
             if log_widget:
-                log_widget.push(msg)
+                asyncio.get_event_loop().call_soon_threadsafe(log_widget.push, msg)
 
         async def _run():
-            await asyncio.get_running_loop().run_in_executor(None, lambda: svc.upload(paths, progress_callback=_cb))
-            await self._refresh()
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, lambda: svc.upload(paths, progress_callback=_cb))
+                await self._refresh()
+            except Exception as exc:
+                ui.notify(f"Upload error: {exc}", type="negative")
 
         asyncio.create_task(_run())
 
@@ -228,15 +231,18 @@ class MainLayout:
 
         def _cb(msg):
             if log_widget := self._log_label:
-                log_widget.push(msg)
+                asyncio.get_event_loop().call_soon_threadsafe(log_widget.push, msg)
 
         async def _run():
-            await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: svc.download(info.confluence_url, DownloadScope.SINGLE, info.path.parent,
-                                      overwrite=True, progress_callback=_cb),
-            )
-            await self._refresh()
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: svc.download(info.confluence_url, DownloadScope.SINGLE, info.path.parent,
+                                          overwrite=True, progress_callback=_cb),
+                )
+                await self._refresh()
+            except Exception as exc:
+                ui.notify(f"Download error: {exc}", type="negative")
 
         asyncio.create_task(_run())
 

@@ -56,3 +56,30 @@ def test_success_returns_true(tmp_path):
         mock_run.return_value = MagicMock(returncode=0, stdout="Done", stderr="")
         ok, msg = DownloadService(cfg).download("https://x.com/1", DownloadScope.SINGLE, tmp_path)
     assert ok is True
+
+
+def test_write_frontmatter_false_skips_frontmatter(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    svc = DownloadService(cfg, MagicMock(spec=FileTracker))
+
+    with patch("services.download_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Done", stderr="")
+        with patch.object(svc, "_write_frontmatter_for_new_files") as mock_fm:
+            svc.download("https://x.com/1", DownloadScope.SINGLE, tmp_path, write_frontmatter=False)
+            mock_fm.assert_not_called()
+
+
+def test_progress_callback_called(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    calls = []
+
+    with patch("services.download_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Done", stderr="")
+        DownloadService(cfg, MagicMock()).download(
+            "https://x.com/1",
+            DownloadScope.SINGLE,
+            tmp_path,
+            progress_callback=lambda msg: calls.append(msg),
+        )
+
+    assert len(calls) == 2
