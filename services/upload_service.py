@@ -20,8 +20,14 @@ class UploadService:
         parent_page_id: str | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> list[tuple[Path, bool, str]]:
-        env = {**os.environ, **self.config.as_env_dict()}
-        return [self._upload_one(p, parent_page_id, env, progress_callback) for p in paths]
+        results = []
+        for p in paths:
+            file_env = {**os.environ, **self.config.as_env_dict()}
+            info = self.tracker._inspect(p)
+            if info.confluence_space:
+                file_env["CONFLUENCE_SPACE_KEY"] = info.confluence_space
+            results.append(self._upload_one(p, parent_page_id, file_env, progress_callback))
+        return results
 
     def _upload_one(
         self,

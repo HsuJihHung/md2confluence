@@ -51,10 +51,19 @@ def open_download_dialog(config: ConfluenceConfig, tracker: FileTracker, default
                 "When checked, existing files are replaced with the Confluence version."
             )
 
-        progress_log = ui.log(max_lines=10).classes(
-            "w-full h-24 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-xs font-mono rounded border border-gray-200 dark:border-gray-800 mt-3"
-        )
-        progress_log.set_visibility(False)
+        progress_container = ui.column().classes("w-full gap-1 mt-3")
+        with progress_container:
+            with ui.row().classes("w-full justify-between items-center"):
+                ui.label("Progress Log").classes("text-xs text-gray-600 dark:text-gray-400 uppercase")
+                def _copy_progress_log():
+                    log_text = "\n".join(c.text for c in progress_log.default_slot.children)
+                    ui.clipboard.write(log_text)
+                    ui.notify("Log copied to clipboard")
+                ui.button("📋 Copy Log", on_click=_copy_progress_log).classes("text-xs").props("flat dense")
+            progress_log = ui.log(max_lines=10).classes(
+                "w-full h-24 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
+            )
+        progress_container.set_visibility(False)
 
         async def _download():
             url = url_input.value.strip()
@@ -63,7 +72,7 @@ def open_download_dialog(config: ConfluenceConfig, tracker: FileTracker, default
                 ui.notify("URL and directory are required", type="warning")
                 return
 
-            progress_log.set_visibility(True)
+            progress_container.set_visibility(True)
             svc = DownloadService(config, tracker)
             loop = asyncio.get_running_loop()
 

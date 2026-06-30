@@ -118,3 +118,23 @@ def test_upload_with_parent_page_id(tmp_path):
     cmd_args = mock_run.call_args[0][0]
     assert "--root-page" in cmd_args
     assert "12345" in cmd_args
+
+
+def test_upload_uses_file_specific_space_key(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("# Hello", encoding="utf-8")
+    cfg = _make_cfg(tmp_path)
+    tracker = MagicMock(spec=FileTracker)
+    
+    mock_info = MagicMock()
+    mock_info.confluence_space = "CUSTOM_SPACE"
+    tracker._inspect.return_value = mock_info
+
+    with patch("services.upload_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Page ID: 111\n", stderr="")
+        UploadService(cfg, tracker).upload([path])
+
+    assert mock_run.called
+    env_passed = mock_run.call_args[1]["env"]
+    assert env_passed["CONFLUENCE_SPACE_KEY"] == "CUSTOM_SPACE"
+

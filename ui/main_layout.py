@@ -27,6 +27,7 @@ class MainLayout:
         self._file_count_label = None
 
     def build(self):
+        ui.keyboard(on_key=self._handle_key)
         drawer = ui.left_drawer(value=True, bordered=True, top_corner=True, bottom_corner=True).classes("p-0 bg-gray-50 dark:bg-gray-900").props("width=550")
         with drawer:
             self._file_list_container = ui.column().classes("w-full gap-0 p-0")
@@ -97,6 +98,11 @@ class MainLayout:
             self._list_container = ui.column().classes("w-full gap-0 p-0")
             self._update_tree_buttons_visibility()
             self._rebuild_file_list()
+
+    def _handle_key(self, e):
+        if e.key.escape and e.action.keydown:
+            if self.multi_push_mode:
+                self._cancel_multi_push()
 
     def _toggle_multi_push_mode(self):
         self.multi_push_mode = True
@@ -415,7 +421,14 @@ class MainLayout:
                     ).props("outline").classes("text-xs").tooltip("Change the linked Confluence Page ID")
 
                 # Operation log
-                ui.label("Last Operation Log").classes("text-xs text-gray-600 dark:text-gray-400 uppercase")
+                with ui.row().classes("w-full justify-between items-center mt-2"):
+                    ui.label("Last Operation Log").classes("text-xs text-gray-600 dark:text-gray-400 uppercase")
+                    def _copy_op_log():
+                        if self._log_label:
+                            log_text = "\n".join(c.text for c in self._log_label.default_slot.children)
+                            ui.clipboard.write(log_text)
+                            ui.notify("Log copied to clipboard")
+                    ui.button("📋 Copy Log", on_click=_copy_op_log).classes("text-xs").props("flat dense")
                 self._log_label = ui.log(max_lines=1000).classes(
                     "w-full h-64 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
                 )
@@ -424,6 +437,20 @@ class MainLayout:
         if not paths:
             ui.notify("No files selected", type="warning")
             return
+
+        # Find which paths do not have a page ID set
+        path_to_info = {info.path: info for info in self.files}
+        paths_without_id = [p for p in paths if p in path_to_info and not path_to_info[p].confluence_id.strip()]
+
+        if not paths_without_id:
+            # All selected files already have page IDs set. Push directly.
+            self._do_upload(paths, None)
+            return
+
+        # Notify the user about files missing page IDs if multiple files are selected
+        if len(paths) > 1:
+            filenames = ", ".join(p.name for p in paths_without_id)
+            ui.notify(f"Parent Page ID required for: {filenames}", type="info", duration=5)
 
         with ui.dialog() as dlg, ui.card():
             ui.label("Enter Parent Page ID").classes("font-bold")
