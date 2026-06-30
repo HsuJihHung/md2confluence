@@ -119,7 +119,32 @@ class DownloadService:
                     pass
 
             cmd = self._build_cmd(page_url, scope)
-            result = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            run_env = env.copy()
+            run_env["PYTHONIOENCODING"] = "utf-8"
+            run_env["PYTHONUTF8"] = "1"
+            raw_result = subprocess.run(cmd, env=run_env, capture_output=True)
+            
+            def decode_bytes(b) -> str:
+                if isinstance(b, str):
+                    return b
+                if not b:
+                    return ""
+                for enc in ["utf-8", "gbk", "gb18030", "cp950", "utf-16", "latin-1"]:
+                    try:
+                        return b.decode(enc)
+                    except UnicodeDecodeError:
+                        continue
+                return b.decode("utf-8", errors="replace")
+
+            stdout = decode_bytes(raw_result.stdout)
+            stderr = decode_bytes(raw_result.stderr)
+            
+            class DecodedResult:
+                def __init__(self, returncode, stdout, stderr):
+                    self.returncode = returncode
+                    self.stdout = stdout
+                    self.stderr = stderr
+            result = DecodedResult(raw_result.returncode, stdout, stderr)
 
             if result.returncode != 0:
                 msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"

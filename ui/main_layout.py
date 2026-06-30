@@ -26,12 +26,14 @@ class MainLayout:
         self._rendered_paths: list[Path] = []
         self._search_input = None
         self._file_count_label = None
+        self._operation_logs: dict[Path, list[str]] = {}
+        self._multi_push_logs: list[str] = []
 
     def build(self):
         ui.keyboard(on_key=self._handle_key)
         drawer = ui.left_drawer(value=True, bordered=True, top_corner=True, bottom_corner=True).classes("p-0 bg-gray-50 dark:bg-gray-900").props("width=550")
         with drawer:
-            self._file_list_container = ui.column().classes("w-full gap-0 p-0")
+            self._file_list_container = ui.column().classes("w-full h-full gap-0 p-0 no-wrap overflow-hidden")
             self._build_file_panel()
 
         with ui.header().classes("items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-800"):
@@ -60,7 +62,7 @@ class MainLayout:
     # Stubs — filled in Tasks 8, 9, 10
     def _build_file_panel(self):
         with self._file_list_container:
-            with ui.row().classes("w-full items-center px-2 py-1 bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 gap-1"):
+            with ui.row().classes("w-full items-center px-2 py-1 bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 gap-1 flex-shrink-0"):
                 ui.label("View:").classes("text-xs text-gray-600 dark:text-gray-400")
                 ui.button("≡ Flat", on_click=lambda: self._set_view("flat")).classes("text-xs px-2 py-0.5")
                 ui.button("⊞ Tree", on_click=lambda: self._set_view("tree")).classes("text-xs px-2 py-0.5")
@@ -86,7 +88,7 @@ class MainLayout:
                     self._refresh_icon = ui.html("&#x27F3;").classes("inline-block origin-center mr-1.5")
                     self._refresh_text = ui.label("Refresh")
 
-            with ui.row().classes("w-full items-center px-2 py-1 bg-gray-50 dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800 gap-2") as self._tree_controls_row:
+            with ui.row().classes("w-full items-center px-2 py-1 bg-gray-50 dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800 gap-2 flex-shrink-0") as self._tree_controls_row:
                 ui.label("Folders:").classes("text-xs text-gray-600 dark:text-gray-400")
                 self._expand_all_btn = ui.button("＋ Expand All", on_click=self._expand_all).classes("text-xs px-1.5 py-0.5 !bg-slate-100 !text-slate-700 dark:!bg-slate-800 dark:!text-slate-300 border border-slate-300 dark:border-slate-700 hover:!bg-slate-200")
                 self._collapse_all_btn = ui.button("－ Collapse All", on_click=self._collapse_all).classes("text-xs px-1.5 py-0.5 !bg-slate-100 !text-slate-700 dark:!bg-slate-800 dark:!text-slate-300 border border-slate-300 dark:border-slate-700 hover:!bg-slate-200")
@@ -94,9 +96,9 @@ class MainLayout:
             self._search_input = ui.input(
                 placeholder="Search files...",
                 on_change=self._rebuild_file_list
-            ).classes("w-full px-3 py-1.5 text-xs").props("clearable")
+            ).classes("w-full px-3 py-1.5 text-xs flex-shrink-0").props("clearable")
 
-            self._list_container = ui.column().classes("w-full gap-0 p-0")
+            self._list_container = ui.column().classes("w-full gap-0 p-0 flex-1 overflow-y-auto")
             self._update_tree_buttons_visibility()
             self._rebuild_file_list()
 
@@ -381,6 +383,8 @@ class MainLayout:
                         "w-full flex-1 min-h-96 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 "
                         "text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
                     )
+                    for line in self._multi_push_logs:
+                        self._multi_push_log_widget.push(line)
             return
 
         if not self.selected_file:
@@ -396,6 +400,12 @@ class MainLayout:
             "not_linked": ("text-gray-700 dark:text-gray-400", "bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700"),
             "failed": ("text-red-700 dark:text-red-400", "bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800"),
         }
+        status_tooltips = {
+            "synced": "File content matches Confluence version (same hash)",
+            "modified_locally": "File has been edited locally since last sync",
+            "not_linked": "File is not linked to any Confluence page",
+            "failed": "Last sync attempt failed",
+        }
         txt_color, badge_bg = status_colors.get(info.status.value, ("text-gray-700 dark:text-gray-400", "bg-gray-100 dark:bg-gray-800"))
 
         with self._detail_container:
@@ -406,8 +416,8 @@ class MainLayout:
                         ui.label(info.path.name).classes("text-gray-900 dark:text-white text-lg font-bold")
                         ui.label(str(info.path)).classes("text-gray-600 dark:text-gray-500 text-xs")
                     ui.label(f"● {info.status.value.replace('_', ' ')}").classes(
-                        f"text-xs px-3 py-1 rounded-full {txt_color} {badge_bg} whitespace-nowrap"
-                    )
+                        f"text-xs px-3 py-1 rounded-full {txt_color} {badge_bg} whitespace-nowrap cursor-help"
+                    ).tooltip(status_tooltips.get(info.status.value, ""))
 
                 # Confluence info card
                 with ui.card().classes("w-full bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800"):
@@ -459,6 +469,9 @@ class MainLayout:
                 self._log_label = ui.log(max_lines=1000).classes(
                     "w-full h-64 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
                 )
+                if info.path in self._operation_logs:
+                    for line in self._operation_logs[info.path]:
+                        self._log_label.push(line)
 
     def _prompt_parent_page_id(self, paths, notify_single=False):
         if not paths:
@@ -479,40 +492,106 @@ class MainLayout:
             filenames = ", ".join(p.name for p in paths_without_id)
             ui.notify(f"Parent Page ID required for: {filenames}", type="info", duration=5)
 
-        with ui.dialog() as dlg, ui.card():
-            ui.label("Enter Parent Page ID").classes("font-bold")
+        with ui.dialog() as dlg, ui.card().classes("w-96 p-4"):
+            ui.label("Enter Parent Page ID").classes("font-bold text-lg mb-2")
             parent_id_input = ui.input(
                 "Parent Page ID",
                 value=self.config.default_parent_page_id or ""
-            ).classes("w-full")
+            ).classes("w-full mb-4")
+
+            ui.label("Confluence Page Name for Unlinked Files").classes("font-bold text-sm text-gray-700 dark:text-gray-300 mb-1")
+            
+            # Form fields for each unlinked file
+            title_inputs = {}
+            for path in paths_without_id:
+                default_name = path.stem
+                with ui.column().classes("w-full gap-1 border-l-2 border-indigo-500 pl-2 mb-3"):
+                    ui.label(path.name).classes("text-xs font-semibold text-indigo-600 dark:text-indigo-400")
+                    # Radio group for option selection
+                    radio = ui.radio(
+                        {
+                            "same": "Same as original markdown file name",
+                            "custom": "Input custom confluence page name"
+                        },
+                        value="same"
+                    ).classes("text-xs")
+                    
+                    # Custom input field
+                    custom_input = ui.input(
+                        "Custom Page Name",
+                        value=default_name
+                    ).classes("w-full text-xs")
+                    custom_input.bind_visibility_from(radio, "value", value="custom")
+                    
+                    title_inputs[path] = (radio, custom_input)
 
             def _confirm():
                 parent_id = parent_id_input.value.strip()
+                custom_titles = {}
+                for path, (radio, custom_input) in title_inputs.items():
+                    if radio.value == "custom":
+                        custom_titles[path] = custom_input.value.strip() or path.stem
+                    else:
+                        custom_titles[path] = path.stem
+                
                 dlg.close()
-                self._do_upload(paths, parent_id if parent_id else None)
+                self._do_upload(paths, parent_id if parent_id else None, custom_titles=custom_titles)
 
             with ui.row().classes("gap-2 justify-end w-full mt-2"):
                 ui.button("Cancel", on_click=dlg.close).props("flat")
                 ui.button("Push", on_click=_confirm).classes("bg-indigo-600 text-white")
         dlg.open()
 
-    def _do_upload(self, paths, parent_page_id=None):
+    def _add_log(self, target_path: Path | None, msg: str):
+        lines = msg.splitlines()
+        filtered_lines = []
+        for line in lines:
+            if " - DEBUG - " in line:
+                continue
+            filtered_lines.append(line)
+        filtered_msg = "\n".join(filtered_lines).strip()
+        if not filtered_msg:
+            return
+
+        if target_path is None:
+            self._multi_push_logs.append(filtered_msg)
+            if self._multi_push_log_widget:
+                self._multi_push_log_widget.push(filtered_msg)
+        else:
+            if target_path not in self._operation_logs:
+                self._operation_logs[target_path] = []
+            self._operation_logs[target_path].append(filtered_msg)
+            if self.selected_file and self.selected_file.path == target_path and self._log_label:
+                self._log_label.push(filtered_msg)
+
+    def _do_upload(self, paths, parent_page_id=None, custom_titles=None):
         # Deferred to avoid importing service modules at UI module load time
         from services.upload_service import UploadService
         svc = UploadService(self.config, self.tracker)
-        # Use the dedicated multi-push log widget when available (multi-push mode),
-        # otherwise fall back to the single-file detail panel log.
-        log_widget = self._multi_push_log_widget if self._multi_push_log_widget else self._log_label
+        is_multi = self.multi_push_mode
+        if is_multi:
+            self._multi_push_logs.clear()
+            if self._multi_push_log_widget:
+                self._multi_push_log_widget.clear()
+        else:
+            for p in paths:
+                self._operation_logs[p] = []
+                if self.selected_file and self.selected_file.path == p and self._log_label:
+                    self._log_label.clear()
+
         client = ui.context.client
         loop = asyncio.get_running_loop()
 
-        def _cb(file, msg):
-            if log_widget:
-                loop.call_soon_threadsafe(log_widget.push, msg)
+        def _cb(file_path_str, msg):
+            p = Path(file_path_str) if file_path_str else None
+            if is_multi:
+                loop.call_soon_threadsafe(self._add_log, None, msg)
+            else:
+                loop.call_soon_threadsafe(self._add_log, p, msg)
 
         async def _run():
             try:
-                await loop.run_in_executor(None, lambda: svc.upload(paths, parent_page_id=parent_page_id, progress_callback=_cb))
+                await loop.run_in_executor(None, lambda: svc.upload(paths, parent_page_id=parent_page_id, progress_callback=_cb, custom_titles=custom_titles))
                 await self._refresh()
             except Exception as exc:
                 with client:
@@ -527,12 +606,15 @@ class MainLayout:
         # Deferred to avoid importing service modules at UI module load time
         from services.download_service import DownloadService, DownloadScope
         svc = DownloadService(self.config, self.tracker)
+        self._operation_logs[info.path] = []
+        if self._log_label:
+            self._log_label.clear()
+
         client = ui.context.client
         loop = asyncio.get_running_loop()
 
         def _cb(msg):
-            if log_widget := self._log_label:
-                loop.call_soon_threadsafe(log_widget.push, msg)
+            loop.call_soon_threadsafe(self._add_log, info.path, msg)
 
         async def _run():
             try:
@@ -568,7 +650,7 @@ class MainLayout:
                 dlg.close()
                 
                 with client:
-                    loading_notification = ui.notify("Updating page ID and resolving space key...", type="info", timeout=0)
+                    loading_notification = ui.notification("Updating page ID and resolving space key...", type="info", timeout=None)
                 
                 try:
                     # Resolve page details via Confluence API
@@ -674,8 +756,8 @@ class MainLayout:
                     if f.path == self.selected_file.path:
                         self.selected_file = f
                         break
-            self.checked_files.clear()
-            self.multi_push_mode = False
+            existing_paths = {f.path for f in self.files}
+            self.checked_files = {p for p in self.checked_files if p in existing_paths}
             self._update_push_checked_btn()
             self._rebuild_file_list()
             self._rebuild_detail()

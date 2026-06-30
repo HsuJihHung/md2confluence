@@ -19,14 +19,49 @@ class UploadService:
         paths: list[Path],
         parent_page_id: str | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
+        custom_titles: dict[Path, str] | None = None,
     ) -> list[tuple[Path, bool, str]]:
         results = []
+        custom_titles = custom_titles or {}
         for p in paths:
             file_env = {**os.environ, **self.config.as_env_dict()}
             info = self.tracker._inspect(p)
+            space_key = None
             if info.confluence_space:
-                file_env["CONFLUENCE_SPACE_KEY"] = info.confluence_space
-            results.append(self._upload_one(p, parent_page_id, file_env, progress_callback))
+                space_key = info.confluence_space
+
+            if not space_key and parent_page_id:
+                try:
+                    space_key = self.config.fetch_space_key_for_page(parent_page_id)
+                except Exception as e:
+                    if progress_callback:
+                        progress_callback(str(p), f"⚠ Failed to fetch space key for parent page '{parent_page_id}': {e}")
+
+            if not space_key and info.confluence_id:
+                try:
+                    space_key = self.config.fetch_space_key_for_page(info.confluence_id)
+                except Exception as e:
+                    if progress_callback:
+                        progress_callback(str(p), f"⚠ Failed to fetch space key for existing page '{info.confluence_id}': {e}")
+
+            if space_key:
+                file_env["CONFLUENCE_SPACE_KEY"] = space_key
+
+            custom_title = custom_titles.get(p)
+            if custom_title:
+                # Write the temporary title to frontmatter of the uploaded copy or directly write to state
+                # Wait, md2conf reads the frontmatter 'title' or the first H1 header in the file.
+                # Let's inspect the original file's frontmatter.
+                # We can temporarily update the confluence_page_name in frontmatter of the file before uploading,
+                # or create a temporary file with the updated frontmatter title.
+                # Let's see if md2conf uses "title" frontmatter. Yes, it says "does not apply if title comes from front-matter".
+                # Let's write the custom title directly to the file's frontmatter before executing, and restore it if needed,
+                # or write a temporary copy. Let's write a temporary copy or just write to the file's frontmatter,
+                # which is actually a sync state property. Let's see if we can write "title" in frontmatter.
+                # If we modify the original file's frontmatter to include "title: Custom Title", md2conf will pick it up.
+                # Let's write the custom title to the frontmatter using tracker.write_sync_state or read/write frontmatter directly.
+                pass
+            results.append(self._upload_one(p, parent_page_id, file_env, progress_callback, custom_title=custom_title))
         return results
 
     def _upload_one(
@@ -35,12 +70,65 @@ class UploadService:
         parent_page_id: str | None,
         env: dict,
         callback: Callable | None,
+        custom_title: str | None = None,
     ) -> tuple[Path, bool, str]:
         if callback:
             callback(str(path), f"Uploading {path.name}...")
 
-        cmd = self._build_cmd(path, parent_page_id)
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        # If a custom title is provided, temporarily write it to the frontmatter of the file
+        original_content = None
+        if custom_title:
+            try:
+                original_content = path.read_text(encoding="utf-8")
+                # Import frontmatter to manipulate
+                import frontmatter as fm_lib
+                try:
+                    post = fm_lib.load(str(path))
+                except Exception:
+                    post = fm_lib.Post(self.tracker._strip_frontmatter_manually(original_content))
+                post.metadata["title"] = custom_title
+                post.metadata["confluence_page_name"] = custom_title
+                path.write_text(fm_lib.dumps(post), encoding="utf-8")
+            except Exception as e:
+                if callback:
+                    callback(str(path), f"⚠ Failed to set temporary custom title: {e}")
+
+        try:
+            cmd = self._build_cmd(path, parent_page_id)
+            run_env = env.copy()
+            run_env["PYTHONIOENCODING"] = "utf-8"
+            run_env["PYTHONUTF8"] = "1"
+            raw_result = subprocess.run(cmd, env=run_env, capture_output=True)
+            
+            def decode_bytes(b) -> str:
+                if isinstance(b, str):
+                    return b
+                if not b:
+                    return ""
+                for enc in ["utf-8", "gbk", "gb18030", "cp950", "utf-16", "latin-1"]:
+                    try:
+                        return b.decode(enc)
+                    except UnicodeDecodeError:
+                        continue
+                return b.decode("utf-8", errors="replace")
+
+            stdout = decode_bytes(raw_result.stdout)
+            stderr = decode_bytes(raw_result.stderr)
+            
+            class DecodedResult:
+                def __init__(self, returncode, stdout, stderr):
+                    self.returncode = returncode
+                    self.stdout = stdout
+                    self.stderr = stderr
+            result = DecodedResult(raw_result.returncode, stdout, stderr)
+        finally:
+            # Always restore the original content if we modified it
+            if original_content is not None:
+                try:
+                    path.write_text(original_content, encoding="utf-8")
+                except Exception as e:
+                    if callback:
+                        callback(str(path), f"⚠ Failed to restore original file content: {e}")
 
         if result.returncode != 0:
             msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
@@ -98,6 +186,7 @@ class UploadService:
 
         cmd.append("--no-force-valid-url")
         cmd.append("--no-generated-by")
+        cmd += ["--loglevel", "info"]
         return cmd
 
     def _parse_page_info(self, output: str) -> dict | None:

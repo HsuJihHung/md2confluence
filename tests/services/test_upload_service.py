@@ -166,3 +166,45 @@ def test_upload_fetches_and_saves_full_page_details(tmp_path):
     )
 
 
+def test_upload_resolves_space_from_parent_page_id(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("# Hello", encoding="utf-8")
+    cfg = _make_cfg(tmp_path)
+    cfg.fetch_space_key_for_page = MagicMock(return_value="RESOLVED_SPACE")
+    tracker = MagicMock(spec=FileTracker)
+    
+    mock_info = MagicMock()
+    mock_info.confluence_space = ""
+    mock_info.confluence_id = ""
+    tracker._inspect.return_value = mock_info
+
+    with patch("services.upload_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Page ID: 111\n", stderr="")
+        UploadService(cfg, tracker).upload([path], parent_page_id="parent123")
+
+    cfg.fetch_space_key_for_page.assert_called_once_with("parent123")
+    env_passed = mock_run.call_args[1]["env"]
+    assert env_passed["CONFLUENCE_SPACE_KEY"] == "RESOLVED_SPACE"
+
+
+def test_upload_resolves_space_from_existing_page_id(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("# Hello", encoding="utf-8")
+    cfg = _make_cfg(tmp_path)
+    cfg.fetch_space_key_for_page = MagicMock(return_value="RESOLVED_EXISTING_SPACE")
+    tracker = MagicMock(spec=FileTracker)
+    
+    mock_info = MagicMock()
+    mock_info.confluence_space = ""
+    mock_info.confluence_id = "existing123"
+    tracker._inspect.return_value = mock_info
+
+    with patch("services.upload_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Page ID: 111\n", stderr="")
+        UploadService(cfg, tracker).upload([path])
+
+    cfg.fetch_space_key_for_page.assert_called_once_with("existing123")
+    env_passed = mock_run.call_args[1]["env"]
+    assert env_passed["CONFLUENCE_SPACE_KEY"] == "RESOLVED_EXISTING_SPACE"
+
+
