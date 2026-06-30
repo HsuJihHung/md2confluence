@@ -70,7 +70,7 @@ class MainLayout:
                 ).classes("text-xs px-2 py-0.5 !bg-slate-100 !text-slate-700 dark:!bg-slate-800 dark:!text-slate-300 font-bold border border-slate-300 dark:border-slate-700 hover:!bg-slate-200")
                 self._push_checked_btn = ui.button(
                     "",
-                    on_click=lambda: self._prompt_parent_page_id(list(self.checked_files))
+                    on_click=lambda: self._prompt_parent_page_id(list(self.checked_files), notify_single=True)
                 ).classes("text-xs !bg-indigo-600 hover:!bg-indigo-700 !text-white px-2 py-0.5 font-bold").tooltip("Push selected files to Confluence")
                 self._cancel_checked_btn = ui.button(
                     "Cancel",
@@ -433,7 +433,7 @@ class MainLayout:
                     "w-full h-64 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
                 )
 
-    def _prompt_parent_page_id(self, paths):
+    def _prompt_parent_page_id(self, paths, notify_single=False):
         if not paths:
             ui.notify("No files selected", type="warning")
             return
@@ -447,8 +447,8 @@ class MainLayout:
             self._do_upload(paths, None)
             return
 
-        # Notify the user about files missing page IDs if multiple files are selected
-        if len(paths) > 1:
+        # Notify the user about files missing page IDs if multiple files are selected or notify_single is True
+        if len(paths) > 1 or notify_single:
             filenames = ", ".join(p.name for p in paths_without_id)
             ui.notify(f"Parent Page ID required for: {filenames}", type="info", duration=5)
 
