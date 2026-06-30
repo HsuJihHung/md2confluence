@@ -17,21 +17,23 @@ class UploadService:
     def upload(
         self,
         paths: list[Path],
+        parent_page_id: str | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> list[tuple[Path, bool, str]]:
         env = {**os.environ, **self.config.as_env_dict()}
-        return [self._upload_one(p, env, progress_callback) for p in paths]
+        return [self._upload_one(p, parent_page_id, env, progress_callback) for p in paths]
 
     def _upload_one(
         self,
         path: Path,
+        parent_page_id: str | None,
         env: dict,
         callback: Callable | None,
     ) -> tuple[Path, bool, str]:
         if callback:
             callback(str(path), f"Uploading {path.name}...")
 
-        cmd = self._build_cmd(path)
+        cmd = self._build_cmd(path, parent_page_id)
         result = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
@@ -52,10 +54,12 @@ class UploadService:
             callback(str(path), f"Uploaded {path.name}")
         return path, True, result.stdout
 
-    def _build_cmd(self, path: Path) -> list[str]:
+    def _build_cmd(self, path: Path, parent_page_id: str | None = None) -> list[str]:
         exe = shutil.which("md2conf")
         base = [exe] if exe else [sys.executable, "-m", "md2conf"]
         cmd = base + [str(path)]
+        if parent_page_id:
+            cmd += ["--root-page", parent_page_id]
         if self.config.skip_title_heading:
             cmd.append("--skip-title-heading")
         if self.config.mermaid_mode == "local":

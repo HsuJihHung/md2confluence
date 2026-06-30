@@ -19,9 +19,19 @@ class MainLayout:
         self._dir_input = None
         self._current_view: str = getattr(config, "default_view", "flat")
         self._expanded_dirs: set[Path] = set()
+        self.checked_files: set[Path] = set()
+        self.multi_push_mode: bool = False
+        self._last_clicked_path: Path | None = None
+        self._rendered_paths: list[Path] = []
 
     def build(self):
+        drawer = ui.left_drawer(value=True, bordered=True, top_corner=True, bottom_corner=True).classes("p-0 bg-gray-50 dark:bg-gray-900").props("width=550")
+        with drawer:
+            self._file_list_container = ui.column().classes("w-full gap-0 p-0")
+            self._build_file_panel()
+
         with ui.header().classes("items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-800"):
+            ui.button(icon="menu", on_click=drawer.toggle).classes("text-gray-600 dark:text-gray-300").props("flat round dense")
             ui.label("md2confluence").classes("text-indigo-600 dark:text-indigo-400 font-bold text-sm")
             self._dir_input = ui.input(
                 placeholder="Select directory…",
@@ -37,13 +47,9 @@ class MainLayout:
             ui.button("⬇ Download Page…", on_click=self._open_download_dialog).classes("text-xs")
             ui.button("⚙ Config", on_click=lambda: ui.navigate.to("/config")).classes("text-xs")
 
-        with ui.splitter(value=28).classes("w-full flex-1") as splitter:
-            with splitter.before:
-                self._file_list_container = ui.column().classes("w-full h-full")
-                self._build_file_panel()
-            with splitter.after:
-                self._detail_container = ui.column().classes("w-full h-full p-4")
-                self._build_detail_panel()
+        # The main content area handles the details panel
+        self._detail_container = ui.column().classes("w-full p-4")
+        self._build_detail_panel()
 
         with ui.footer().classes("px-4 py-1 bg-gray-100 dark:bg-gray-950 text-xs text-gray-600 dark:text-gray-500 border-t border-gray-200 dark:border-gray-800 flex gap-4"):
             self._conn_dot = ui.label("● Connected").classes("text-green-600 dark:text-green-400")
@@ -58,29 +64,64 @@ class MainLayout:
                 ui.label("View:").classes("text-xs text-gray-600 dark:text-gray-400")
                 ui.button("≡ Flat", on_click=lambda: self._set_view("flat")).classes("text-xs px-2 py-0.5")
                 ui.button("⊞ Tree", on_click=lambda: self._set_view("tree")).classes("text-xs px-2 py-0.5")
+                self._divider = ui.element("div").classes("w-px h-4 bg-gray-300 dark:bg-gray-700 mx-1")
+                self._multi_push_toggle_btn = ui.button(
+                    "☑ Select",
+                    on_click=self._toggle_multi_push_mode
+                ).classes("text-xs px-2 py-0.5 !bg-slate-100 !text-slate-700 dark:!bg-slate-800 dark:!text-slate-300 font-bold border border-slate-300 dark:border-slate-700 hover:!bg-slate-200")
+                self._push_checked_btn = ui.button(
+                    "",
+                    on_click=lambda: self._prompt_parent_page_id(list(self.checked_files))
+                ).classes("text-xs !bg-indigo-600 hover:!bg-indigo-700 !text-white px-2 py-0.5 font-bold")
+                self._cancel_checked_btn = ui.button(
+                    "Cancel",
+                    on_click=self._cancel_multi_push
+                ).classes("text-xs px-2 py-0.5 !bg-gray-200 !text-gray-700 dark:!bg-gray-800 dark:!text-gray-300 hover:!bg-gray-300")
+                self._update_push_checked_btn()
                 ui.space()
                 ui.label(f"{len(self.files)} files").classes("text-xs text-gray-600 dark:text-gray-400")
 
-            self._flat_container = ui.column().classes("w-full overflow-y-auto")
-            self._tree_container = ui.column().classes("w-full overflow-y-auto")
+            self._list_container = ui.column().classes("w-full gap-0 p-0")
+            self._rebuild_file_list()
 
-            self._render_flat_list()
-            self._render_tree_list()
-            self._set_view(self._current_view)
+    def _toggle_multi_push_mode(self):
+        self.multi_push_mode = True
+        self.checked_files.clear()
+        self._update_push_checked_btn()
+        self._rebuild_file_list()
+
+    def _cancel_multi_push(self):
+        self.multi_push_mode = False
+        self.checked_files.clear()
+        self._update_push_checked_btn()
+        self._rebuild_file_list()
+
+    def _update_push_checked_btn(self):
+        if not self.multi_push_mode:
+            self._multi_push_toggle_btn.set_visibility(True)
+            self._push_checked_btn.set_visibility(False)
+            self._cancel_checked_btn.set_visibility(False)
+        else:
+            self._multi_push_toggle_btn.set_visibility(False)
+            self._cancel_checked_btn.set_visibility(True)
+            count = len(self.checked_files)
+            if count > 0:
+                self._push_checked_btn.set_text(f"Push Checked ({count})")
+                self._push_checked_btn.set_visibility(True)
+            else:
+                self._push_checked_btn.set_visibility(False)
 
     def _set_view(self, view: str):
         self._current_view = view
-        self._flat_container.set_visibility(view == "flat")
-        self._tree_container.set_visibility(view == "tree")
+        self._rebuild_file_list()
 
     def _render_flat_list(self):
-        self._flat_container.clear()
-        with self._flat_container:
-            for info in self.files:
-                self._file_row(info, indent=0)
+        self._rendered_paths = [info.path for info in self.files]
+        for info in self.files:
+            self._file_row(info, indent=0)
 
     def _render_tree_list(self):
-        self._tree_container.clear()
+        self._rendered_paths = []
         base = Path(self.config.last_directory) if self.config.last_directory else None
 
         class TreeNode:
@@ -110,27 +151,58 @@ class MainLayout:
                 current = current.children[part]
             current.files.append(info)
 
+        def get_all_files(n: TreeNode) -> list[Path]:
+            res = [f.path for f in n.files]
+            for child in n.children.values():
+                res.extend(get_all_files(child))
+            return res
+
+        def is_dir_checked(n: TreeNode) -> bool:
+            all_files = get_all_files(n)
+            if not all_files:
+                return False
+            return all(p in self.checked_files for p in all_files)
+
+        def toggle_dir_checked(n: TreeNode, checked: bool):
+            all_files = get_all_files(n)
+            for p in all_files:
+                if checked:
+                    self.checked_files.add(p)
+                else:
+                    self.checked_files.discard(p)
+            self._update_push_checked_btn()
+            self._rebuild_file_list()
+
+        import re
+        def natural_sort_key(s: str) -> list:
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
         def render_node(node: TreeNode, indent: int = 0):
             if node is root:
-                for child_name, child_node in sorted(node.children.items()):
+                for child_name, child_node in sorted(node.children.items(), key=lambda item: natural_sort_key(item[0])):
                     render_node(child_node, indent)
-                for info in node.files:
+                for info in sorted(node.files, key=lambda f: natural_sort_key(f.path.name)):
+                    self._rendered_paths.append(info.path)
                     self._file_row(info, indent)
             else:
                 is_expanded = node.path in self._expanded_dirs
                 with ui.row().classes("w-full items-center px-2 py-1 gap-1 cursor-pointer").on(
                     "click", lambda _, p=node.path: self._toggle_dir(p)
                 ):
-                    ui.label("▾" if is_expanded else "▸").classes("text-gray-600 dark:text-gray-500 text-xs").style(f"margin-left: {indent}px")
+                    ui.label("▾" if is_expanded else "▸").classes("text-gray-600 dark:text-gray-500 text-lg").style(f"margin-left: {indent}px")
+                    if self.multi_push_mode:
+                        dir_checked = is_dir_checked(node)
+                        cb = ui.checkbox(value=dir_checked, on_change=lambda e, n=node: toggle_dir_checked(n, e.value)).props("dense")
+                        cb.on("click.stop", lambda: None)
                     ui.label(node.name + "/").classes("text-xs text-gray-600 dark:text-gray-400 uppercase")
                 if is_expanded:
-                    for child_name, child_node in sorted(node.children.items()):
+                    for child_name, child_node in sorted(node.children.items(), key=lambda item: natural_sort_key(item[0])):
                         render_node(child_node, indent + 12)
-                    for info in node.files:
+                    for info in sorted(node.files, key=lambda f: natural_sort_key(f.path.name)):
+                        self._rendered_paths.append(info.path)
                         self._file_row(info, indent + 12)
 
-        with self._tree_container:
-            render_node(root)
+        render_node(root)
 
     def _toggle_dir(self, directory: Path):
         if directory in self._expanded_dirs:
@@ -149,25 +221,65 @@ class MainLayout:
 
         is_selected = self.selected_file is not None and self.selected_file.path == info.path
         row_classes = (
-            "w-full flex flex-col px-3 py-2 cursor-pointer border-b border-gray-200 dark:border-gray-800 "
+            "w-full flex items-center px-3 py-1.5 cursor-pointer border-b border-gray-200 dark:border-gray-800 "
             + ("bg-indigo-50 dark:bg-indigo-950" if is_selected else "hover:bg-gray-100 dark:hover:bg-gray-800")
         )
 
         with ui.element("div").classes(row_classes).style(f"padding-left:{indent + 12}px").on(
-            "click", lambda _, i=info: self._select_file(i)
+            "click", lambda e, i=info: self._on_row_click(i, e)
         ):
             with ui.row().classes("items-center gap-1.5"):
+                if self.multi_push_mode:
+                    cb = ui.checkbox(value=info.path in self.checked_files, on_change=lambda e, p=info.path: self._toggle_checked(p, e.value)).props("dense")
+                    cb.on("click.stop", lambda: None)
                 ui.element("span").classes(f"w-2 h-2 rounded-full flex-shrink-0 {dot_color}")
                 ui.label(info.path.name).classes(
                     "text-xs font-bold text-indigo-900 dark:text-white" if is_selected else "text-xs text-gray-800 dark:text-gray-300"
                 )
-            if info.confluence_id:
-                sub = f"ID: {info.confluence_id} · {info.confluence_last_sync[:10] if info.confluence_last_sync else ''}"
-            elif info.status.value == "failed":
-                sub = "last operation failed"
+
+    def _on_row_click(self, info: "FileInfo", event_args=None):
+        ctrl_pressed = False
+        shift_pressed = False
+        if event_args and isinstance(event_args.args, dict):
+            shift_pressed = event_args.args.get("shiftKey", False)
+            ctrl_pressed = event_args.args.get("ctrlKey", False) or event_args.args.get("metaKey", False)
+
+        # Auto-activate multi push mode on Shift/Ctrl click
+        if (shift_pressed or ctrl_pressed) and not self.multi_push_mode:
+            self.multi_push_mode = True
+            self.checked_files.clear()
+            if self.selected_file:
+                self._last_clicked_path = self.selected_file.path
+            self._update_push_checked_btn()
+
+        if self.multi_push_mode:
+            current_path = info.path
+            if shift_pressed and self._last_clicked_path and self._last_clicked_path in self._rendered_paths and current_path in self._rendered_paths:
+                idx1 = self._rendered_paths.index(self._last_clicked_path)
+                idx2 = self._rendered_paths.index(current_path)
+                start_idx, end_idx = min(idx1, idx2), max(idx1, idx2)
+                target_state = self._last_clicked_path in self.checked_files if self._last_clicked_path in self.checked_files else True
+                for p in self._rendered_paths[start_idx : end_idx + 1]:
+                    if target_state:
+                        self.checked_files.add(p)
+                    else:
+                        self.checked_files.discard(p)
+                self._update_push_checked_btn()
+                self._rebuild_file_list()
             else:
-                sub = "not linked"
-            ui.label(sub).classes("text-xs text-gray-500 dark:text-gray-400 ml-3.5")
+                new_val = current_path not in self.checked_files
+                self._toggle_checked(current_path, new_val)
+                self._last_clicked_path = current_path
+                self._rebuild_file_list()
+        else:
+            self._select_file(info)
+
+    def _toggle_checked(self, path: Path, value: bool):
+        if value:
+            self.checked_files.add(path)
+        else:
+            self.checked_files.discard(path)
+        self._update_push_checked_btn()
 
     def _select_file(self, info: "FileInfo"):
         self.selected_file = info
@@ -235,8 +347,8 @@ class MainLayout:
                 # Action buttons
                 with ui.row().classes("gap-2 flex-wrap"):
                     ui.button(
-                        "⬆ Upload to Confluence",
-                        on_click=lambda: self._do_upload([info.path]),
+                        "⬆ Push to Confluence",
+                        on_click=lambda: self._prompt_parent_page_id([info.path]),
                     ).classes("bg-indigo-600 text-white text-xs")
                     ui.button(
                         "⬇ Pull from Confluence",
@@ -253,7 +365,29 @@ class MainLayout:
                     "w-full h-64 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
                 )
 
-    def _do_upload(self, paths):
+    def _prompt_parent_page_id(self, paths):
+        if not paths:
+            ui.notify("No files selected", type="warning")
+            return
+
+        with ui.dialog() as dlg, ui.card():
+            ui.label("Enter Parent Page ID").classes("font-bold")
+            parent_id_input = ui.input(
+                "Parent Page ID",
+                value=self.config.default_parent_page_id or ""
+            ).classes("w-full")
+
+            def _confirm():
+                parent_id = parent_id_input.value.strip()
+                dlg.close()
+                self._do_upload(paths, parent_id if parent_id else None)
+
+            with ui.row().classes("gap-2 justify-end w-full mt-2"):
+                ui.button("Cancel", on_click=dlg.close).props("flat")
+                ui.button("Push", on_click=_confirm).classes("bg-indigo-600 text-white")
+        dlg.open()
+
+    def _do_upload(self, paths, parent_page_id=None):
         # Deferred to avoid importing service modules at UI module load time
         from services.upload_service import UploadService
         svc = UploadService(self.config, self.tracker)
@@ -267,7 +401,7 @@ class MainLayout:
 
         async def _run():
             try:
-                await loop.run_in_executor(None, lambda: svc.upload(paths, progress_callback=_cb))
+                await loop.run_in_executor(None, lambda: svc.upload(paths, parent_page_id=parent_page_id, progress_callback=_cb))
                 await self._refresh()
             except Exception as exc:
                 with client:
@@ -328,9 +462,13 @@ class MainLayout:
         open_download_dialog(self.config, self.tracker, default_dir=self.config.last_directory, on_download_complete=self._refresh)
 
     def _rebuild_file_list(self):
-        if self._file_list_container:
-            self._file_list_container.clear()
-            self._build_file_panel()
+        if self._list_container:
+            self._list_container.clear()
+            with self._list_container:
+                if self._current_view == "flat":
+                    self._render_flat_list()
+                else:
+                    self._render_tree_list()
 
     def _rebuild_detail(self):
         if self._detail_container:
@@ -363,6 +501,8 @@ class MainLayout:
                     f"{counts['synced']} synced · {counts['modified_locally']} modified · "
                     f"{counts['not_linked']} unlinked · {counts['failed']} error"
                 )
+            self.checked_files.clear()
+            self.multi_push_mode = False
             self._rebuild_file_list()
         finally:
             if self._refresh_icon:

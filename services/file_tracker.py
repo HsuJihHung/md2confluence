@@ -30,7 +30,9 @@ class FileInfo:
 
 class FileTracker:
     def scan(self, directory: Path) -> list[FileInfo]:
-        return [self._inspect(p) for p in sorted(directory.rglob("*.md"))]
+        def natural_sort_key(p: Path) -> list:
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(p))]
+        return [self._inspect(p) for p in sorted(directory.rglob("*.md"), key=natural_sort_key)]
 
     def _inspect(self, path: Path) -> FileInfo:
         fm = self.read_frontmatter(path)

@@ -104,3 +104,17 @@ def test_upload_with_macro_options(tmp_path):
     cmd_args = mock_run.call_args[0][0]
     assert "--no-render-mermaid" in cmd_args
     assert "--no-render-plantuml" in cmd_args
+
+
+def test_upload_with_parent_page_id(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("# Hello", encoding="utf-8")
+    cfg = _make_cfg(tmp_path)
+
+    with patch("services.upload_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Page ID: 111\n", stderr="")
+        UploadService(cfg, MagicMock()).upload([path], parent_page_id="12345")
+
+    cmd_args = mock_run.call_args[0][0]
+    assert "--root-page" in cmd_args
+    assert "12345" in cmd_args
