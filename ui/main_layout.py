@@ -493,27 +493,71 @@ class MainLayout:
         asyncio.create_task(_run())
 
     def _change_id_dialog(self, info):
-        with ui.dialog() as dlg, ui.card():
-            ui.label("Set Confluence Page ID").classes("font-bold")
-            new_id = ui.input("Page ID", placeholder="e.g. 98321").classes("w-full")
+        client = ui.context.client
+        with ui.dialog() as dlg, ui.card().classes("w-96 p-6"):
+            ui.label("Set Confluence Page ID").classes("text-lg font-bold text-gray-800 dark:text-gray-200")
+            new_id = ui.input(
+                "Page ID", 
+                value=info.confluence_id or "", 
+                placeholder="e.g. 98321"
+            ).classes("w-full")
 
-            def _apply():
-                if new_id.value.strip():
+            async def _apply():
+                page_id = new_id.value.strip()
+                if not page_id:
+                    with client:
+                        ui.notify("Please enter a Page ID first", type="warning")
+                    return
+                
+                dlg.close()
+                
+                with client:
+                    loading_notification = ui.notify("Updating page ID and resolving space key...", type="info", timeout=0)
+                
+                try:
+                    # Resolve space key via Confluence API
+                    space_key = await asyncio.get_running_loop().run_in_executor(
+                        None, 
+                        self.config.fetch_space_key_for_page, 
+                        page_id
+                    )
+                    
                     self.tracker.write_sync_state(info.path, {
-                        "confluence_id": new_id.value.strip(),
-                        "confluence_space": self.config.default_space,
+                        "confluence_id": page_id,
+                        "confluence_space": space_key,
                     })
-                    dlg.close()
+                    
+                    with client:
+                        ui.notify(f"Confluence ID updated. Space resolved to '{space_key}'", type="positive")
+                except Exception as exc:
+                    # Fallback to default space
+                    fallback_space = self.config.default_space
+                    self.tracker.write_sync_state(info.path, {
+                        "confluence_id": page_id,
+                        "confluence_space": fallback_space,
+                    })
+                    
+                    with client:
+                        ui.notify(
+                            f"Confluence ID updated. Used default space '{fallback_space}' (API lookup failed: {exc})", 
+                            type="warning"
+                        )
+                finally:
                     new_info = self.tracker._inspect(info.path)
                     if self.selected_file and self.selected_file.path == info.path:
                         self.selected_file = new_info
-                    self._rebuild_detail()
-                    asyncio.create_task(self._refresh())
-                    ui.notify("Confluence ID updated", type="positive")
+                    
+                    with client:
+                        self._rebuild_detail()
+                        asyncio.create_task(self._refresh())
+                        try:
+                            loading_notification.dismiss()
+                        except Exception:
+                            pass
 
-            with ui.row().classes("gap-2 justify-end w-full mt-2"):
+            with ui.row().classes("gap-2 justify-end w-full mt-4"):
                 ui.button("Cancel", on_click=dlg.close).props("flat")
-                ui.button("Save", on_click=_apply).classes("bg-indigo-600 text-white")
+                ui.button("Save", on_click=lambda: asyncio.create_task(_apply())).classes("bg-indigo-600 text-white")
         dlg.open()
 
     def _open_download_dialog(self):

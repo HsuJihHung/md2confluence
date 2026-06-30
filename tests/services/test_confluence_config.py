@@ -169,3 +169,33 @@ def test_test_connection_unauthorized(tmp_path):
         success, msg = cfg.test_connection()
         assert not success
         assert "Authentication failed" in msg
+
+
+def test_fetch_space_key_for_page_success(tmp_path):
+    from unittest.mock import patch, MagicMock
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    cfg.cloud_domain = "test.atlassian.net"
+    cfg.cloud_api_token = "tok"
+    
+    with patch("md2conf.api.ConfluenceAPI") as mock_api_class:
+        mock_api_instance = MagicMock()
+        mock_page = MagicMock()
+        mock_page.spaceId = "space-123"
+        mock_api_instance.get_page.return_value = mock_page
+        mock_api_instance.space_id_to_key.return_value = "SPACE"
+        mock_api_class.return_value.__enter__.return_value = mock_api_instance
+        
+        space_key = cfg.fetch_space_key_for_page("12345")
+        assert space_key == "SPACE"
+        mock_api_instance.get_page.assert_called_once_with("12345")
+        mock_api_instance.space_id_to_key.assert_called_once_with("space-123")
+
+
+def test_fetch_space_key_for_page_missing_credentials(tmp_path):
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    cfg.cloud_domain = ""
+    cfg.cloud_api_token = ""
+    
+    import pytest
+    with pytest.raises(ValueError, match="Domain/URL is required"):
+        cfg.fetch_space_key_for_page("12345")

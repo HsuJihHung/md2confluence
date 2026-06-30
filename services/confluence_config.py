@@ -166,3 +166,50 @@ class ConfluenceConfig:
             elif "Failed to establish a new connection" in err_msg or "Max retries exceeded" in err_msg:
                 return False, f"Could not reach server: {domain}. Check your network and URL."
             return False, f"Connection failed: {err_msg}"
+
+    def fetch_space_key_for_page(self, page_id: str) -> str:
+        from md2conf.environment import ConnectionProperties
+        from md2conf.api import ConfluenceAPI
+        from urllib.parse import urlparse
+
+        if self.deployment == DeploymentType.CLOUD:
+            domain = self.cloud_domain
+            username = self.cloud_email
+            api_key = self.cloud_api_token
+            space_key = self.default_space
+            api_version = "v2"
+            base_path = "/wiki/"
+        else:
+            parsed = urlparse(self.server_url)
+            domain = parsed.netloc or self.server_url
+            username = self.server_username
+            api_key = self.server_pat or self.server_password
+            space_key = self.default_space
+            api_version = "v1"
+
+            bp = self.server_context_path or "/"
+            if not bp.startswith("/"):
+                bp = "/" + bp
+            if not bp.endswith("/"):
+                bp = bp + "/"
+            base_path = bp
+
+        if not domain:
+            raise ValueError("Domain/URL is required")
+        if not api_key:
+            raise ValueError("API Token/Password is required")
+
+        properties = ConnectionProperties(
+            domain=domain,
+            base_path=base_path,
+            user_name=username,
+            api_key=api_key,
+            space_key=space_key or "DUMMY",
+            api_version=api_version,
+        )
+        with ConfluenceAPI(properties) as session:
+            page = session.get_page(page_id)
+            if not page or not page.spaceId:
+                raise ValueError("Could not retrieve space information for this page.")
+            return session.space_id_to_key(page.spaceId)
+
