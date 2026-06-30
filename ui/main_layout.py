@@ -13,6 +13,7 @@ class MainLayout:
         self.selected_file: FileInfo | None = None
         self.files: list[FileInfo] = []
         self._log_label = None
+        self._multi_push_log_widget = None
         self._detail_container = None
         self._file_list_container = None
         self._status_label = None
@@ -67,7 +68,7 @@ class MainLayout:
                 self._multi_push_toggle_btn = ui.button(
                     "☑ Select",
                     on_click=self._toggle_multi_push_mode
-                ).classes("text-xs px-2 py-0.5 !bg-slate-100 !text-slate-700 dark:!bg-slate-800 dark:!text-slate-300 font-bold border border-slate-300 dark:border-slate-700 hover:!bg-slate-200")
+                ).classes("text-xs px-2 py-0.5 !bg-slate-100 !text-slate-700 dark:!bg-slate-800 dark:!text-slate-300 font-bold border border-slate-300 dark:border-slate-700 hover:!bg-slate-200").tooltip("Keyboard support: Ctrl-click to toggle, Shift-click to select range, ESC to cancel")
                 self._push_checked_btn = ui.button(
                     "",
                     on_click=lambda: self._prompt_parent_page_id(list(self.checked_files), notify_single=True)
@@ -109,12 +110,15 @@ class MainLayout:
         self.checked_files.clear()
         self._update_push_checked_btn()
         self._rebuild_file_list()
+        self._rebuild_detail()
 
     def _cancel_multi_push(self):
         self.multi_push_mode = False
         self.checked_files.clear()
+        self._multi_push_log_widget = None
         self._update_push_checked_btn()
         self._rebuild_file_list()
+        self._rebuild_detail()
 
     def _update_push_checked_btn(self):
         if not self.multi_push_mode:
@@ -356,6 +360,29 @@ class MainLayout:
         self._rebuild_detail()
 
     def _build_detail_panel(self):
+        # In multi-push mode show a dedicated push log panel in the main area
+        if self.multi_push_mode:
+            with self._detail_container:
+                with ui.column().classes("w-full h-full gap-3 p-4"):
+                    with ui.row().classes("w-full items-center justify-between"):
+                        ui.label("Multi-Push Log").classes("text-sm font-bold text-gray-800 dark:text-gray-200")
+                        def _copy_multi_log():
+                            if self._multi_push_log_widget:
+                                log_text = "\n".join(
+                                    c.text for c in self._multi_push_log_widget.default_slot.children
+                                )
+                                ui.clipboard.write(log_text)
+                                ui.notify("Log copied to clipboard")
+                        ui.button("📋 Copy Log", on_click=_copy_multi_log).classes("text-xs").props("flat dense")
+                    ui.label(
+                        "Select files from the left panel and click Push to start. Progress will appear here."
+                    ).classes("text-xs text-gray-500 dark:text-gray-400")
+                    self._multi_push_log_widget = ui.log(max_lines=2000).classes(
+                        "w-full flex-1 min-h-96 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 "
+                        "text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
+                    )
+            return
+
         if not self.selected_file:
             with self._detail_container:
                 with ui.column().classes("w-full h-full items-center justify-center"):
@@ -473,7 +500,9 @@ class MainLayout:
         # Deferred to avoid importing service modules at UI module load time
         from services.upload_service import UploadService
         svc = UploadService(self.config, self.tracker)
-        log_widget = self._log_label  # capture now to avoid stale ref if user switches file
+        # Use the dedicated multi-push log widget when available (multi-push mode),
+        # otherwise fall back to the single-file detail panel log.
+        log_widget = self._multi_push_log_widget if self._multi_push_log_widget else self._log_label
         client = ui.context.client
         loop = asyncio.get_running_loop()
 
@@ -542,20 +571,22 @@ class MainLayout:
                     loading_notification = ui.notify("Updating page ID and resolving space key...", type="info", timeout=0)
                 
                 try:
-                    # Resolve space key via Confluence API
-                    space_key = await asyncio.get_running_loop().run_in_executor(
+                    # Resolve page details via Confluence API
+                    details = await asyncio.get_running_loop().run_in_executor(
                         None, 
-                        self.config.fetch_space_key_for_page, 
+                        self.config.fetch_page_details, 
                         page_id
                     )
                     
                     self.tracker.write_sync_state(info.path, {
                         "confluence_id": page_id,
-                        "confluence_space": space_key,
+                        "confluence_space": details["confluence_space"],
+                        "confluence_page_name": details["confluence_page_name"],
+                        "confluence_url": details["confluence_url"],
                     })
                     
                     with client:
-                        ui.notify(f"Confluence ID updated. Space resolved to '{space_key}'", type="positive")
+                        ui.notify(f"Confluence ID updated. Space resolved to '{details['confluence_space']}'", type="positive")
                 except Exception as exc:
                     # Fallback to default space
                     fallback_space = self.config.default_space
@@ -638,10 +669,16 @@ class MainLayout:
                     f"{counts['synced']} synced · {counts['modified_locally']} modified · "
                     f"{counts['not_linked']} unlinked · {counts['failed']} error"
                 )
+            if self.selected_file:
+                for f in self.files:
+                    if f.path == self.selected_file.path:
+                        self.selected_file = f
+                        break
             self.checked_files.clear()
             self.multi_push_mode = False
             self._update_push_checked_btn()
             self._rebuild_file_list()
+            self._rebuild_detail()
         finally:
             if self._refresh_icon:
                 self._refresh_icon.classes(remove="animate-spin")

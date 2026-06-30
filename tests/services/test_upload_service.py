@@ -87,7 +87,7 @@ def test_progress_callback_called(tmp_path):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         UploadService(cfg, MagicMock()).upload([path], progress_callback=lambda f, m: calls.append(m))
 
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_upload_with_macro_options(tmp_path):
@@ -137,4 +137,32 @@ def test_upload_uses_file_specific_space_key(tmp_path):
     assert mock_run.called
     env_passed = mock_run.call_args[1]["env"]
     assert env_passed["CONFLUENCE_SPACE_KEY"] == "CUSTOM_SPACE"
+
+
+def test_upload_fetches_and_saves_full_page_details(tmp_path):
+    path = tmp_path / "a.md"
+    path.write_text("# Hello", encoding="utf-8")
+    cfg = _make_cfg(tmp_path)
+    cfg.fetch_page_details = MagicMock(return_value={
+        "confluence_id": "999",
+        "confluence_space": "TEAM",
+        "confluence_page_name": "Fetched Title",
+        "confluence_url": "https://co.atlassian.net/wiki/spaces/TEAM/pages/999"
+    })
+    tracker = MagicMock(spec=FileTracker)
+
+    with patch("services.upload_service.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Page ID: 999\n", stderr="")
+        UploadService(cfg, tracker).upload([path])
+
+    cfg.fetch_page_details.assert_called_once_with("999")
+    tracker.write_sync_state.assert_called_once_with(
+        path, {
+            "confluence_id": "999",
+            "confluence_space": "TEAM",
+            "confluence_page_name": "Fetched Title",
+            "confluence_url": "https://co.atlassian.net/wiki/spaces/TEAM/pages/999"
+        }
+    )
+
 

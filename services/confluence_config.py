@@ -167,7 +167,7 @@ class ConfluenceConfig:
                 return False, f"Could not reach server: {domain}. Check your network and URL."
             return False, f"Connection failed: {err_msg}"
 
-    def fetch_space_key_for_page(self, page_id: str) -> str:
+    def fetch_page_details(self, page_id: str) -> dict:
         from md2conf.environment import ConnectionProperties
         from md2conf.api import ConfluenceAPI
         from urllib.parse import urlparse
@@ -179,6 +179,11 @@ class ConfluenceConfig:
             space_key = self.default_space
             api_version = "v2"
             base_path = "/wiki/"
+
+            base_url = domain if (domain.startswith("http://") or domain.startswith("https://")) else f"https://{domain}"
+            base_url = base_url.rstrip("/")
+            if not base_url.endswith("/wiki"):
+                base_url = f"{base_url}/wiki"
         else:
             parsed = urlparse(self.server_url)
             domain = parsed.netloc or self.server_url
@@ -193,6 +198,12 @@ class ConfluenceConfig:
             if not bp.endswith("/"):
                 bp = bp + "/"
             base_path = bp
+
+            base_url = self.server_url.rstrip("/")
+            if self.server_context_path:
+                ctx = self.server_context_path.strip("/")
+                if ctx:
+                    base_url = f"{base_url}/{ctx}"
 
         if not domain:
             raise ValueError("Domain/URL is required")
@@ -209,7 +220,21 @@ class ConfluenceConfig:
         )
         with ConfluenceAPI(properties) as session:
             page = session.get_page(page_id)
-            if not page or not page.spaceId:
+            if not page:
+                raise ValueError("Could not retrieve page information.")
+            if not page.spaceId:
                 raise ValueError("Could not retrieve space information for this page.")
-            return session.space_id_to_key(page.spaceId)
+            space_key = session.space_id_to_key(page.spaceId)
+
+            url = f"{base_url}/spaces/{space_key}/pages/{page_id}"
+            return {
+                "confluence_id": str(page_id),
+                "confluence_space": space_key,
+                "confluence_page_name": page.title or "",
+                "confluence_url": url,
+            }
+
+    def fetch_space_key_for_page(self, page_id: str) -> str:
+        return self.fetch_page_details(page_id)["confluence_space"]
+
 

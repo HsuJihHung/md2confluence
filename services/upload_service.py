@@ -48,13 +48,33 @@ class UploadService:
                 callback(str(path), f"x {msg}")
             return path, False, msg
 
-        page_info = self._parse_page_info(result.stdout)
+        if callback:
+            if result.stdout.strip():
+                callback(str(path), f"[stdout]\n{result.stdout.strip()}")
+            if result.stderr.strip():
+                callback(str(path), f"[stderr]\n{result.stderr.strip()}")
+
+        page_info = self._parse_page_info(result.stdout + "\n" + result.stderr)
         if page_info:
             try:
+                page_id = page_info["confluence_id"]
+                try:
+                    details = self.config.fetch_page_details(page_id)
+                    page_info.update({
+                        "confluence_page_name": details["confluence_page_name"],
+                        "confluence_url": details["confluence_url"],
+                        "confluence_space": details["confluence_space"],
+                    })
+                except Exception as api_err:
+                    if callback:
+                        callback(str(path), f"⚠ Failed to fetch page details from API: {api_err}. Saving basic ID info.")
                 self.tracker.write_sync_state(path, page_info)
             except Exception as e:
                 if callback:
                     callback(str(path), f"⚠ Uploaded but failed to save sync state: {e}")
+        else:
+            if callback:
+                callback(str(path), "⚠ Warning: Could not find Page ID in command output. Local sync state was not updated.")
 
         if callback:
             callback(str(path), f"Uploaded {path.name}")
@@ -80,12 +100,20 @@ class UploadService:
         cmd.append("--no-generated-by")
         return cmd
 
-    def _parse_page_info(self, stdout: str) -> dict | None:
-        # md2conf prints "Page ID: <id>" on success.
-        # Adjust this parser if the actual output format differs.
-        for line in stdout.splitlines():
-            if "Page ID:" in line:
-                page_id = line.split("Page ID:", 1)[-1].strip()
+    def _parse_page_info(self, output: str) -> dict | None:
+        # md2conf prints "Page ID: <id>" on success or logs page updates/checksums in stderr.
+        import re
+        patterns = [
+            r"Page\s+ID:\s*(\d+)",
+            r"Up-to-date\s+page\s*\(matching\s+checksum\):\s*(\d+)",
+            r"Up-to-date\s+page\s*\(unchanged\s+content\):\s*(\d+)",
+            r"Detected\s+page\s+with\s+updated\s+content:\s*(\d+)",
+            r"Detected\s+page\s+with\s+new\s+title:\s*(\d+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, output, re.IGNORECASE)
+            if match:
+                page_id = match.group(1)
                 return {
                     "confluence_id": page_id,
                     "confluence_space": self.config.default_space,
