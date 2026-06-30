@@ -31,6 +31,12 @@ class local_folder_picker(ui.dialog):
             
             self.add_drives_toggle()
             
+            # Search Input to filter folders
+            self.search_input = ui.input(
+                placeholder="Search folders...",
+                on_change=lambda: self.update_grid()
+            ).classes("w-full mb-2 text-xs").props("clearable")
+            
             # Grid for displaying folders
             self.grid = ui.aggrid({
                 "columnDefs": [{"field": "name", "headerName": "Folder", "flex": 1}],
@@ -94,6 +100,13 @@ class local_folder_picker(ui.dialog):
             paths = [p for p in self.path.iterdir() if p.is_dir()]
             if not self.show_hidden_files:
                 paths = [p for p in paths if not p.name.startswith(".")]
+            
+            # Apply search filter
+            if hasattr(self, "search_input") and self.search_input.value:
+                query = self.search_input.value.strip().lower()
+                if query:
+                    paths = [p for p in paths if query in p.name.lower()]
+
             paths.sort(key=lambda p: p.name.lower())
             
             for p in paths:
@@ -108,6 +121,10 @@ class local_folder_picker(ui.dialog):
         path_str = e.args["data"]["path"]
         self.path = Path(path_str).resolve()
         
+        # Clear search input when navigating
+        if hasattr(self, "search_input"):
+            self.search_input.value = ""
+            
         # Update drive toggle selected value if drive changes
         if platform.system() == "Windows" and hasattr(self, "drives_toggle"):
             for d in self.drives_toggle.options:

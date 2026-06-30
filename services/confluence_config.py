@@ -99,3 +99,70 @@ class ConfluenceConfig:
         if self.plantuml_server:
             res["PLANTUML_SERVER"] = self.plantuml_server
         return res
+
+    def test_connection(self) -> tuple[bool, str]:
+        from md2conf.environment import ConnectionProperties
+        from md2conf.api import ConfluenceAPI
+        from urllib.parse import urlparse
+
+        if self.deployment == DeploymentType.CLOUD:
+            domain = self.cloud_domain
+            username = self.cloud_email
+            api_key = self.cloud_api_token
+            space_key = self.default_space
+            api_version = "v2"
+            base_path = "/wiki/"
+        else:
+            parsed = urlparse(self.server_url)
+            domain = parsed.netloc or self.server_url
+            username = self.server_username
+            api_key = self.server_pat or self.server_password
+            space_key = self.default_space
+            api_version = "v1"
+
+            # Format server context path to start and end with '/' to satisfy validation
+            bp = self.server_context_path or "/"
+            if not bp.startswith("/"):
+                bp = "/" + bp
+            if not bp.endswith("/"):
+                bp = bp + "/"
+            base_path = bp
+
+        if not domain:
+            return False, "Domain/URL is required"
+        if not api_key:
+            return False, "API Token/Password is required"
+
+        try:
+            properties = ConnectionProperties(
+                domain=domain,
+                base_path=base_path,
+                user_name=username,
+                api_key=api_key,
+                space_key=space_key or "DUMMY",
+                api_version=api_version,
+            )
+            with ConfluenceAPI(properties) as session:
+                # Always execute a real HTTP request first to verify credentials (especially on Server where space_key_to_id is a no-op)
+                session.page_exists("DUMMY_PAGE_FOR_CONNECTION_TEST")
+
+                if space_key:
+                    try:
+                        session.space_key_to_id(space_key)
+                        return True, f"Connection successful! Valid space key '{space_key}'."
+                    except Exception as e:
+                        err_str = str(e)
+                        if "404" in err_str and "space" in err_str.lower():
+                            return True, f"Connection successful, but Space Key '{space_key}' was not found (404)."
+                        raise e
+                else:
+                    return True, "Connection successful! (No default space specified)"
+        except Exception as e:
+            err_msg = str(e)
+            if "401" in err_msg or "Unauthorized" in err_msg:
+                return False, "Authentication failed: 401 Unauthorized. Check your email/username and API token/password."
+            elif "403" in err_msg or "Forbidden" in err_msg:
+                return False, "Access forbidden: 403 Forbidden. Check your permissions."
+            elif "Failed to establish a new connection" in err_msg or "Max retries exceeded" in err_msg:
+                return False, f"Could not reach server: {domain}. Check your network and URL."
+            return False, f"Connection failed: {err_msg}"

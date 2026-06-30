@@ -101,3 +101,71 @@ def test_save_and_load_server_credentials(tmp_path):
     cfg2 = ConfluenceConfig(config_dir=tmp_path)
     assert cfg2.server_username == "jsmith"
     assert cfg2.server_password == "mypassword"
+
+
+def test_test_connection_validation_errors(tmp_path):
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    cfg.cloud_domain = ""
+    cfg.cloud_api_token = ""
+    success, msg = cfg.test_connection()
+    assert not success
+    assert "Domain/URL is required" in msg
+
+    cfg.cloud_domain = "test.atlassian.net"
+    cfg.cloud_api_token = ""
+    success, msg = cfg.test_connection()
+    assert not success
+    assert "API Token/Password is required" in msg
+
+
+def test_test_connection_success_with_space(tmp_path):
+    from unittest.mock import patch, MagicMock
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    cfg.cloud_domain = "test.atlassian.net"
+    cfg.cloud_api_token = "tok"
+    cfg.default_space = "SPACE"
+
+    with patch("md2conf.api.ConfluenceAPI") as mock_api_class:
+        mock_api_instance = MagicMock()
+        mock_api_class.return_value.__enter__.return_value = mock_api_instance
+        
+        success, msg = cfg.test_connection()
+        assert success
+        assert "Valid space key" in msg
+        mock_api_instance.page_exists.assert_called_once_with("DUMMY_PAGE_FOR_CONNECTION_TEST")
+        mock_api_instance.space_key_to_id.assert_called_once_with("SPACE")
+
+
+def test_test_connection_space_not_found(tmp_path):
+    from unittest.mock import patch, MagicMock
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    cfg.cloud_domain = "test.atlassian.net"
+    cfg.cloud_api_token = "tok"
+    cfg.default_space = "SPACE"
+
+    with patch("md2conf.api.ConfluenceAPI") as mock_api_class:
+        mock_api_instance = MagicMock()
+        mock_api_instance.space_key_to_id.side_effect = Exception("404 Space Not Found")
+        mock_api_class.return_value.__enter__.return_value = mock_api_instance
+        
+        success, msg = cfg.test_connection()
+        assert success
+        assert "Space Key 'SPACE' was not found (404)" in msg
+        mock_api_instance.page_exists.assert_called_once_with("DUMMY_PAGE_FOR_CONNECTION_TEST")
+
+
+def test_test_connection_unauthorized(tmp_path):
+    from unittest.mock import patch, MagicMock
+    cfg = ConfluenceConfig(config_dir=tmp_path)
+    cfg.cloud_domain = "test.atlassian.net"
+    cfg.cloud_api_token = "tok"
+    cfg.default_space = "SPACE"
+
+    with patch("md2conf.api.ConfluenceAPI") as mock_api_class:
+        mock_api_instance = MagicMock()
+        mock_api_instance.page_exists.side_effect = Exception("401 Unauthorized")
+        mock_api_class.return_value.__enter__.return_value = mock_api_instance
+        
+        success, msg = cfg.test_connection()
+        assert not success
+        assert "Authentication failed" in msg

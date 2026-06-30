@@ -41,7 +41,7 @@ def open_download_dialog(config: ConfluenceConfig, tracker: FileTracker, default
             ui.label("Save to").classes("text-xs text-gray-600 dark:text-gray-400 uppercase mt-3")
             with ui.row().classes("w-full gap-2"):
                 dir_input = ui.input(value=default_dir).classes("flex-1")
-                ui.button("Browse…", on_click=_browse_dir).classes("text-xs")
+                ui.button("Browse", on_click=_browse_dir).classes("text-xs")
 
             ui.label("Options").classes("text-xs text-gray-600 dark:text-gray-400 uppercase mt-3")
             opt_attachments = ui.checkbox("Download attachments and images", value=True)

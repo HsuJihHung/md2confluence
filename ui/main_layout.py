@@ -23,6 +23,8 @@ class MainLayout:
         self.multi_push_mode: bool = False
         self._last_clicked_path: Path | None = None
         self._rendered_paths: list[Path] = []
+        self._search_input = None
+        self._file_count_label = None
 
     def build(self):
         drawer = ui.left_drawer(value=True, bordered=True, top_corner=True, bottom_corner=True).classes("p-0 bg-gray-50 dark:bg-gray-900").props("width=550")
@@ -36,16 +38,12 @@ class MainLayout:
             self._dir_input = ui.input(
                 placeholder="Select directory…",
                 value=self.config.last_directory,
-            ).classes("flex-1 max-w-xs text-xs")
-            ui.button("Browse…", on_click=self._browse).classes("text-xs")
-            with ui.button(on_click=self._refresh).classes("text-xs items-center").tooltip(
-                "Rescan directory and recompute sync status (no API calls)"
-            ) as self._refresh_btn:
-                self._refresh_icon = ui.html("&#x27F3;").classes("inline-block origin-center mr-1.5")
-                self._refresh_text = ui.label("Refresh")
+            ).classes("flex-1 max-w-xs text-xs").props("readonly")
+            ui.button("Browse", on_click=self._browse).classes("text-xs")
             ui.space()
-            ui.button("⬇ Download Page…", on_click=self._open_download_dialog).classes("text-xs")
-            ui.button("⚙ Config", on_click=lambda: ui.navigate.to("/config")).classes("text-xs")
+            ui.button("⬇ Download", on_click=self._open_download_dialog).classes("text-xs").tooltip("Download pages from Confluence")
+            ui.button("⚙ Config", on_click=lambda: ui.navigate.to("/config")).classes("text-xs").tooltip("Configure Confluence settings")
+            ui.button("📖 Readme", on_click=lambda: ui.navigate.to("/readme")).classes("text-xs").tooltip("View Project Documentation")
 
         # The main content area handles the details panel
         self._detail_container = ui.column().classes("w-full p-4")
@@ -72,16 +70,32 @@ class MainLayout:
                 self._push_checked_btn = ui.button(
                     "",
                     on_click=lambda: self._prompt_parent_page_id(list(self.checked_files))
-                ).classes("text-xs !bg-indigo-600 hover:!bg-indigo-700 !text-white px-2 py-0.5 font-bold")
+                ).classes("text-xs !bg-indigo-600 hover:!bg-indigo-700 !text-white px-2 py-0.5 font-bold").tooltip("Push selected files to Confluence")
                 self._cancel_checked_btn = ui.button(
                     "Cancel",
                     on_click=self._cancel_multi_push
                 ).classes("text-xs px-2 py-0.5 !bg-gray-200 !text-gray-700 dark:!bg-gray-800 dark:!text-gray-300 hover:!bg-gray-300")
                 self._update_push_checked_btn()
                 ui.space()
-                ui.label(f"{len(self.files)} files").classes("text-xs text-gray-600 dark:text-gray-400")
+                self._file_count_label = ui.label(f"{len(self.files)} files").classes("text-xs text-gray-600 dark:text-gray-400 mr-2")
+                with ui.button(on_click=self._refresh).classes("text-xs items-center px-2 py-0.5").tooltip(
+                    "Rescan directory and recompute sync status (no API calls)"
+                ) as self._refresh_btn:
+                    self._refresh_icon = ui.html("&#x27F3;").classes("inline-block origin-center mr-1.5")
+                    self._refresh_text = ui.label("Refresh")
+
+            with ui.row().classes("w-full items-center px-2 py-1 bg-gray-50 dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800 gap-2") as self._tree_controls_row:
+                ui.label("Folders:").classes("text-xs text-gray-600 dark:text-gray-400")
+                self._expand_all_btn = ui.button("＋ Expand All", on_click=self._expand_all).classes("text-xs px-1.5 py-0.5 !bg-slate-100 !text-slate-700 dark:!bg-slate-800 dark:!text-slate-300 border border-slate-300 dark:border-slate-700 hover:!bg-slate-200")
+                self._collapse_all_btn = ui.button("－ Collapse All", on_click=self._collapse_all).classes("text-xs px-1.5 py-0.5 !bg-slate-100 !text-slate-700 dark:!bg-slate-800 dark:!text-slate-300 border border-slate-300 dark:border-slate-700 hover:!bg-slate-200")
+
+            self._search_input = ui.input(
+                placeholder="Search files...",
+                on_change=self._rebuild_file_list
+            ).classes("w-full px-3 py-1.5 text-xs").props("clearable")
 
             self._list_container = ui.column().classes("w-full gap-0 p-0")
+            self._update_tree_buttons_visibility()
             self._rebuild_file_list()
 
     def _toggle_multi_push_mode(self):
@@ -106,18 +120,50 @@ class MainLayout:
             self._cancel_checked_btn.set_visibility(True)
             count = len(self.checked_files)
             if count > 0:
-                self._push_checked_btn.set_text(f"Push Checked ({count})")
+                self._push_checked_btn.set_text(f"Push ({count})")
                 self._push_checked_btn.set_visibility(True)
             else:
                 self._push_checked_btn.set_visibility(False)
 
     def _set_view(self, view: str):
         self._current_view = view
+        self._update_tree_buttons_visibility()
         self._rebuild_file_list()
 
+    def _expand_all(self):
+        base = Path(self.config.last_directory) if self.config.last_directory else None
+        if not base:
+            return
+        for f in self.files:
+            p = f.path.parent
+            while p and p != base and p != p.parent:
+                self._expanded_dirs.add(p)
+                p = p.parent
+            if p:
+                self._expanded_dirs.add(p)
+        self._rebuild_file_list()
+
+    def _collapse_all(self):
+        self._expanded_dirs.clear()
+        self._rebuild_file_list()
+
+    def _update_tree_buttons_visibility(self):
+        is_tree = self._current_view == "tree"
+        if hasattr(self, "_tree_controls_row") and self._tree_controls_row:
+            self._tree_controls_row.set_visibility(is_tree)
+
+    def _get_filtered_files(self) -> list[FileInfo]:
+        if not self._search_input or not self._search_input.value:
+            return self.files
+        query = self._search_input.value.strip().lower()
+        if not query:
+            return self.files
+        return [info for info in self.files if query in info.path.name.lower()]
+
     def _render_flat_list(self):
-        self._rendered_paths = [info.path for info in self.files]
-        for info in self.files:
+        filtered = self._get_filtered_files()
+        self._rendered_paths = [info.path for info in filtered]
+        for info in filtered:
             self._file_row(info, indent=0)
 
     def _render_tree_list(self):
@@ -133,7 +179,8 @@ class MainLayout:
 
         root = TreeNode("", base or Path())
 
-        for info in self.files:
+        filtered = self._get_filtered_files()
+        for info in filtered:
             current = root
             try:
                 rel = info.path.parent.relative_to(base) if base else info.path.parent
@@ -186,15 +233,21 @@ class MainLayout:
                     self._file_row(info, indent)
             else:
                 is_expanded = node.path in self._expanded_dirs
-                with ui.row().classes("w-full items-center px-2 py-1 gap-1 cursor-pointer").on(
+                dir_checked = self.multi_push_mode and is_dir_checked(node)
+                row_classes = (
+                    "w-full items-center px-2 py-1 gap-1 cursor-pointer "
+                    + ("bg-indigo-50 dark:bg-indigo-950" if dir_checked else "hover:bg-gray-100 dark:hover:bg-gray-800")
+                )
+                with ui.row().classes(row_classes).on(
                     "click", lambda _, p=node.path: self._toggle_dir(p)
                 ):
                     ui.label("▾" if is_expanded else "▸").classes("text-gray-600 dark:text-gray-500 text-lg").style(f"margin-left: {indent}px")
                     if self.multi_push_mode:
-                        dir_checked = is_dir_checked(node)
-                        cb = ui.checkbox(value=dir_checked, on_change=lambda e, n=node: toggle_dir_checked(n, e.value)).props("dense")
+                        cb = ui.checkbox(value=dir_checked, on_change=lambda e, n=node: toggle_dir_checked(n, e.value)).props("dense").classes("scale-75 origin-left -my-1.5")
                         cb.on("click.stop", lambda: None)
-                    ui.label(node.name + "/").classes("text-xs text-gray-600 dark:text-gray-400 uppercase")
+                    ui.label(node.name + "/").classes(
+                        "text-xs font-bold text-indigo-900 dark:text-white uppercase" if dir_checked else "text-xs text-gray-600 dark:text-gray-400 uppercase"
+                    )
                 if is_expanded:
                     for child_name, child_node in sorted(node.children.items(), key=lambda item: natural_sort_key(item[0])):
                         render_node(child_node, indent + 12)
@@ -220,9 +273,11 @@ class MainLayout:
         }.get(info.status.value, "bg-gray-500")
 
         is_selected = self.selected_file is not None and self.selected_file.path == info.path
+        is_checked = self.multi_push_mode and info.path in self.checked_files
+        should_highlight = is_selected or is_checked
         row_classes = (
             "w-full flex items-center px-3 py-1.5 cursor-pointer border-b border-gray-200 dark:border-gray-800 "
-            + ("bg-indigo-50 dark:bg-indigo-950" if is_selected else "hover:bg-gray-100 dark:hover:bg-gray-800")
+            + ("bg-indigo-50 dark:bg-indigo-950" if should_highlight else "hover:bg-gray-100 dark:hover:bg-gray-800")
         )
 
         with ui.element("div").classes(row_classes).style(f"padding-left:{indent + 12}px").on(
@@ -230,11 +285,11 @@ class MainLayout:
         ):
             with ui.row().classes("items-center gap-1.5"):
                 if self.multi_push_mode:
-                    cb = ui.checkbox(value=info.path in self.checked_files, on_change=lambda e, p=info.path: self._toggle_checked(p, e.value)).props("dense")
+                    cb = ui.checkbox(value=is_checked, on_change=lambda e, p=info.path: self._toggle_checked(p, e.value)).props("dense").classes("scale-75 origin-left -my-1.5")
                     cb.on("click.stop", lambda: None)
                 ui.element("span").classes(f"w-2 h-2 rounded-full flex-shrink-0 {dot_color}")
                 ui.label(info.path.name).classes(
-                    "text-xs font-bold text-indigo-900 dark:text-white" if is_selected else "text-xs text-gray-800 dark:text-gray-300"
+                    "text-xs font-bold text-indigo-900 dark:text-white" if should_highlight else "text-xs text-gray-800 dark:text-gray-300"
                 )
 
     def _on_row_click(self, info: "FileInfo", event_args=None):
@@ -347,17 +402,17 @@ class MainLayout:
                 # Action buttons
                 with ui.row().classes("gap-2 flex-wrap"):
                     ui.button(
-                        "⬆ Push to Confluence",
+                        "⬆ Push",
                         on_click=lambda: self._prompt_parent_page_id([info.path]),
-                    ).classes("bg-indigo-600 text-white text-xs")
+                    ).classes("bg-indigo-600 text-white text-xs").tooltip("Push this file to Confluence")
                     ui.button(
-                        "⬇ Pull from Confluence",
+                        "⬇ Pull",
                         on_click=lambda: self._do_pull(info),
-                    ).props("outline").classes("text-xs")
+                    ).props("outline").classes("text-xs").tooltip("Pull page content from Confluence")
                     ui.button(
-                        "🔗 Change ID…",
+                        "🔗 Change ID",
                         on_click=lambda: self._change_id_dialog(info),
-                    ).props("outline").classes("text-xs")
+                    ).props("outline").classes("text-xs").tooltip("Change the linked Confluence Page ID")
 
                 # Operation log
                 ui.label("Last Operation Log").classes("text-xs text-gray-600 dark:text-gray-400 uppercase")
@@ -449,6 +504,10 @@ class MainLayout:
                         "confluence_space": self.config.default_space,
                     })
                     dlg.close()
+                    new_info = self.tracker._inspect(info.path)
+                    if self.selected_file and self.selected_file.path == info.path:
+                        self.selected_file = new_info
+                    self._rebuild_detail()
                     asyncio.create_task(self._refresh())
                     ui.notify("Confluence ID updated", type="positive")
 
@@ -469,6 +528,13 @@ class MainLayout:
                     self._render_flat_list()
                 else:
                     self._render_tree_list()
+            if self._file_count_label:
+                filtered_count = len(self._get_filtered_files())
+                total_count = len(self.files)
+                if filtered_count != total_count:
+                    self._file_count_label.set_text(f"{filtered_count}/{total_count} files")
+                else:
+                    self._file_count_label.set_text(f"{total_count} files")
 
     def _rebuild_detail(self):
         if self._detail_container:
@@ -503,6 +569,7 @@ class MainLayout:
                 )
             self.checked_files.clear()
             self.multi_push_mode = False
+            self._update_push_checked_btn()
             self._rebuild_file_list()
         finally:
             if self._refresh_icon:

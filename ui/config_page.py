@@ -49,15 +49,35 @@ def build_config_page(config: ConfluenceConfig):
 
             conn_status = ui.label("").classes("text-xs mt-2")
 
-            def _test_connection():
+            async def _test_connection():
                 conn_status.classes(replace="text-xs mt-2 text-yellow-600 dark:text-yellow-400")
-                conn_status.set_text("Testing...")
+                conn_status.set_text("Testing connection...")
+
                 domain = cloud_domain.value if deployment_toggle.value == DeploymentType.CLOUD else server_url.value
-                if domain:
-                    conn_status.set_text("Fields look valid — test by uploading a file")
+                if not domain:
+                    conn_status.set_text("Domain/URL is required")
+                    conn_status.classes(replace="text-xs mt-2 text-red-600 dark:text-red-400")
+                    return
+
+                # Create a temporary config object with current UI inputs to test connection
+                test_config = ConfluenceConfig()
+                test_config.deployment = deployment_toggle.value
+                test_config.cloud_domain = cloud_domain.value
+                test_config.cloud_email = cloud_email.value
+                test_config.cloud_api_token = cloud_token.value
+                test_config.server_url = server_url.value
+                test_config.server_context_path = server_path.value
+                test_config.server_username = server_user.value
+                test_config.server_password = server_pass.value
+                test_config.default_space = default_space.value
+
+                from nicegui import run
+                success, msg = await run.io_bound(test_config.test_connection)
+                if success:
+                    conn_status.set_text(msg)
                     conn_status.classes(replace="text-xs mt-2 text-green-600 dark:text-green-400")
                 else:
-                    conn_status.set_text("Domain/URL is required")
+                    conn_status.set_text(msg)
                     conn_status.classes(replace="text-xs mt-2 text-red-600 dark:text-red-400")
 
             ui.button("Test Connection", on_click=_test_connection).classes("mt-2")
