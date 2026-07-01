@@ -60,7 +60,7 @@ class FileTracker:
         except Exception:
             return {}
 
-    def write_sync_state(self, path: Path, page_info: dict[str, str]) -> None:
+    def write_sync_state(self, path: Path, page_info: dict[str, str], update_hash: bool = True) -> None:
         try:
             post = fm_lib.load(str(path))
         except Exception:
@@ -91,8 +91,12 @@ class FileTracker:
         post.metadata.update({
             **page_info,
             "confluence_last_sync": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "confluence_content_hash": f"sha256:{self.compute_body_hash_from_text(post.content)}",
         })
+        if update_hash:
+            # Only stamp the content hash when this call represents an actual
+            # push/pull sync. Linking/relinking a page ID alone (e.g. "Change ID")
+            # must not make the file appear SYNCED without a real push having happened.
+            post.metadata["confluence_content_hash"] = f"sha256:{self.compute_body_hash_from_text(post.content)}"
         # Atomic write: write to temp then rename
         tmp = path.with_suffix(".md.tmp")
         tmp.write_text(fm_lib.dumps(post), encoding="utf-8")

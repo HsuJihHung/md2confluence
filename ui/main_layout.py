@@ -1,5 +1,6 @@
 # ui/main_layout.py
 import asyncio
+import queue as stdlib_queue
 from pathlib import Path
 from nicegui import ui
 from services.confluence_config import ConfluenceConfig
@@ -28,6 +29,10 @@ class MainLayout:
         self._file_count_label = None
         self._operation_logs: dict[Path, list[str]] = {}
         self._multi_push_logs: list[str] = []
+        self._log_queue: stdlib_queue.SimpleQueue = stdlib_queue.SimpleQueue()
+        self._log_drain_timer = None
+        self._active_paths: set[Path] = set()  # files with an in-flight push/pull
+        self._multi_push_active: bool = False  # a multi-file push is currently running
 
     def build(self):
         ui.keyboard(on_key=self._handle_key)
@@ -136,6 +141,8 @@ class MainLayout:
                 self._push_checked_btn.set_visibility(True)
             else:
                 self._push_checked_btn.set_visibility(False)
+            any_busy = bool(self.checked_files & self._active_paths)
+            self._push_checked_btn.set_enabled(not self._multi_push_active and not any_busy)
 
     def _set_view(self, view: str):
         self._current_view = view
@@ -303,6 +310,8 @@ class MainLayout:
                 ui.label(info.path.name).classes(
                     "text-xs font-bold text-indigo-900 dark:text-white" if should_highlight else "text-xs text-gray-800 dark:text-gray-300"
                 )
+                if info.path in self._active_paths:
+                    ui.spinner(size="1em").classes("text-indigo-500").tooltip("Push/pull in progress")
 
     def _on_row_click(self, info: "FileInfo", event_args=None):
         ctrl_pressed = False
@@ -362,10 +371,14 @@ class MainLayout:
         self._rebuild_detail()
 
     def _build_detail_panel(self):
+        # Flush any log lines still sitting in the queue so a panel switch never
+        # misses lines that haven't been picked up by the drain timer yet.
+        self._drain_log_queue()
+
         # In multi-push mode show a dedicated push log panel in the main area
         if self.multi_push_mode:
             with self._detail_container:
-                with ui.column().classes("w-full h-full gap-3 p-4"):
+                with ui.column().classes("w-full gap-3 p-4"):
                     with ui.row().classes("w-full items-center justify-between"):
                         ui.label("Multi-Push Log").classes("text-sm font-bold text-gray-800 dark:text-gray-200")
                         def _copy_multi_log():
@@ -380,12 +393,19 @@ class MainLayout:
                         "Select files from the left panel and click Push to start. Progress will appear here."
                     ).classes("text-xs text-gray-500 dark:text-gray-400")
                     self._multi_push_log_widget = ui.log(max_lines=2000).classes(
-                        "w-full flex-1 min-h-96 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 "
-                        "text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
+                        "w-full h-96 text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
                     )
                     for line in self._multi_push_logs:
                         self._multi_push_log_widget.push(line)
             return
+
+        if self._multi_push_active:
+            with self._detail_container:
+                with ui.row().classes("w-full items-center gap-2 p-2 mb-2 bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 rounded"):
+                    ui.spinner(size="1em").classes("text-indigo-600")
+                    ui.label("A multi-file push is still running in the background. Reopen ☑ Select to view live progress.").classes(
+                        "text-xs text-indigo-700 dark:text-indigo-300"
+                    )
 
         if not self.selected_file:
             with self._detail_container:
@@ -443,19 +463,27 @@ class MainLayout:
                         ui.label("Not linked to a Confluence page yet.").classes("text-gray-600 dark:text-gray-500 text-xs")
 
                 # Action buttons
+                is_busy = info.path in self._active_paths
                 with ui.row().classes("gap-2 flex-wrap"):
                     ui.button(
                         "⬆ Push",
                         on_click=lambda: self._prompt_parent_page_id([info.path]),
-                    ).classes("bg-indigo-600 text-white text-xs").tooltip("Push this file to Confluence")
+                    ).classes("bg-indigo-600 text-white text-xs").tooltip("Push this file to Confluence").set_enabled(not is_busy)
                     ui.button(
                         "⬇ Pull",
                         on_click=lambda: self._do_pull(info),
-                    ).props("outline").classes("text-xs").tooltip("Pull page content from Confluence")
+                    ).props("outline").classes("text-xs").tooltip("Pull page content from Confluence").set_enabled(not is_busy)
                     ui.button(
                         "🔗 Change ID",
                         on_click=lambda: self._change_id_dialog(info),
-                    ).props("outline").classes("text-xs").tooltip("Change the linked Confluence Page ID")
+                    ).props("outline").classes("text-xs").tooltip("Change the linked Confluence Page ID").set_enabled(not is_busy)
+
+                if info.path in self._active_paths:
+                    with ui.row().classes("w-full items-center gap-2 p-2 bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 rounded"):
+                        ui.spinner(size="1em").classes("text-indigo-600")
+                        ui.label("Push/pull in progress for this file — log below updates live.").classes(
+                            "text-xs text-indigo-700 dark:text-indigo-300"
+                        )
 
                 # Operation log
                 with ui.row().classes("w-full justify-between items-center mt-2"):
@@ -467,8 +495,8 @@ class MainLayout:
                             ui.notify("Log copied to clipboard")
                     ui.button("📋 Copy Log", on_click=_copy_op_log).classes("text-xs").props("flat dense")
                 self._log_label = ui.log(max_lines=1000).classes(
-                    "w-full h-64 bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
-                )
+                    "w-full h-64 text-xs font-mono rounded border border-gray-200 dark:border-gray-800"
+                ).style("color: #111827 !important; background-color: #f9fafb !important;")
                 if info.path in self._operation_logs:
                     for line in self._operation_logs[info.path]:
                         self._log_label.push(line)
@@ -492,40 +520,45 @@ class MainLayout:
             filenames = ", ".join(p.name for p in paths_without_id)
             ui.notify(f"Parent Page ID required for: {filenames}", type="info", duration=5)
 
-        with ui.dialog() as dlg, ui.card().classes("w-96 p-4"):
+        with ui.dialog() as dlg, ui.card().classes("w-[28rem] p-4 max-h-[90vh] flex flex-col"):
             ui.label("Enter Parent Page ID").classes("font-bold text-lg mb-2")
             parent_id_input = ui.input(
                 "Parent Page ID",
-                value=self.config.default_parent_page_id or ""
+                value=self.config.default_parent_page_id or "",
+                validation={"Parent Page ID is required": lambda v: bool(v and v.strip())}
             ).classes("w-full mb-4")
 
             ui.label("Confluence Page Name for Unlinked Files").classes("font-bold text-sm text-gray-700 dark:text-gray-300 mb-1")
             
-            # Form fields for each unlinked file
+            # Form fields for each unlinked file wrapped in a scrollable area
             title_inputs = {}
-            for path in paths_without_id:
-                default_name = path.stem
-                with ui.column().classes("w-full gap-1 border-l-2 border-indigo-500 pl-2 mb-3"):
-                    ui.label(path.name).classes("text-xs font-semibold text-indigo-600 dark:text-indigo-400")
-                    # Radio group for option selection
-                    radio = ui.radio(
-                        {
-                            "same": "Same as original markdown file name",
-                            "custom": "Input custom confluence page name"
-                        },
-                        value="same"
-                    ).classes("text-xs")
-                    
-                    # Custom input field
-                    custom_input = ui.input(
-                        "Custom Page Name",
-                        value=default_name
-                    ).classes("w-full text-xs")
-                    custom_input.bind_visibility_from(radio, "value", value="custom")
-                    
-                    title_inputs[path] = (radio, custom_input)
+            with ui.scroll_area().classes("w-full flex-grow border border-gray-200 dark:border-gray-800 rounded p-2 mb-3 max-h-[40vh]"):
+                for path in paths_without_id:
+                    default_name = path.stem
+                    with ui.column().classes("w-full gap-1 border-l-2 border-indigo-500 pl-2 mb-3"):
+                        ui.label(path.name).classes("text-xs font-semibold text-indigo-600 dark:text-indigo-400")
+                        # Radio group for option selection
+                        radio = ui.radio(
+                            {
+                                "same": "Same as original markdown file name",
+                                "custom": "Input custom confluence page name"
+                            },
+                            value="same"
+                        ).classes("text-xs")
+                        
+                        # Custom input field
+                        custom_input = ui.input(
+                            "Custom Page Name",
+                            value=default_name
+                        ).classes("w-full text-xs")
+                        custom_input.bind_visibility_from(radio, "value", value="custom")
+                        
+                        title_inputs[path] = (radio, custom_input)
 
             def _confirm():
+                if not parent_id_input.validate():
+                    ui.notify("Parent Page ID is required", type="warning")
+                    return
                 parent_id = parent_id_input.value.strip()
                 custom_titles = {}
                 for path, (radio, custom_input) in title_inputs.items():
@@ -535,67 +568,122 @@ class MainLayout:
                         custom_titles[path] = path.stem
                 
                 dlg.close()
-                self._do_upload(paths, parent_id if parent_id else None, custom_titles=custom_titles)
+                self._do_upload(paths, parent_id, custom_titles=custom_titles)
 
             with ui.row().classes("gap-2 justify-end w-full mt-2"):
                 ui.button("Cancel", on_click=dlg.close).props("flat")
                 ui.button("Push", on_click=_confirm).classes("bg-indigo-600 text-white")
         dlg.open()
 
-    def _add_log(self, target_path: Path | None, msg: str):
+    def _enqueue_log(self, target_path: Path | None, msg: str):
+        """Called from background thread — puts log lines into thread-safe queue."""
         lines = msg.splitlines()
-        filtered_lines = []
         for line in lines:
-            if " - DEBUG - " in line:
-                continue
-            filtered_lines.append(line)
-        filtered_msg = "\n".join(filtered_lines).strip()
-        if not filtered_msg:
-            return
+            if " - DEBUG - " not in line:
+                self._log_queue.put((target_path, line))
 
-        if target_path is None:
-            self._multi_push_logs.append(filtered_msg)
-            if self._multi_push_log_widget:
-                self._multi_push_log_widget.push(filtered_msg)
-        else:
-            if target_path not in self._operation_logs:
-                self._operation_logs[target_path] = []
-            self._operation_logs[target_path].append(filtered_msg)
-            if self.selected_file and self.selected_file.path == target_path and self._log_label:
-                self._log_label.push(filtered_msg)
+    def _drain_log_queue(self):
+        """Called by ui.timer on the event loop — drains queue and pushes to widgets."""
+        drained = 0
+        while not self._log_queue.empty() and drained < 200:
+            target_path, line = self._log_queue.get_nowait()
+            if target_path is None:
+                self._multi_push_logs.append(line)
+                if self._multi_push_log_widget:
+                    self._multi_push_log_widget.push(line)
+            else:
+                if target_path not in self._operation_logs:
+                    self._operation_logs[target_path] = []
+                self._operation_logs[target_path].append(line)
+                if self.selected_file and self.selected_file.path == target_path and self._log_label:
+                    self._log_label.push(line)
+            drained += 1
 
     def _do_upload(self, paths, parent_page_id=None, custom_titles=None):
         # Deferred to avoid importing service modules at UI module load time
         from services.upload_service import UploadService
         svc = UploadService(self.config, self.tracker)
-        is_multi = self.multi_push_mode
+        client = self._detail_container.client
+        is_multi = self.multi_push_mode or len(paths) > 1
+        self._active_paths.update(paths)
+        for p in paths:
+            self._operation_logs[p] = []
+
+        # Clear the queue and start the drain timer, parented to the stable page
+        # client (not the button's own slot) so it survives the panel rebuild below.
+        while not self._log_queue.empty():
+            self._log_queue.get_nowait()
+        if self._log_drain_timer:
+            self._log_drain_timer.cancel()
+        with client:
+            self._log_drain_timer = ui.timer(0.1, self._drain_log_queue)
+
         if is_multi:
+            self._multi_push_active = True
+            self.multi_push_mode = True
             self._multi_push_logs.clear()
+            self._update_push_checked_btn()
+            self._rebuild_file_list()
             if self._multi_push_log_widget:
                 self._multi_push_log_widget.clear()
+            else:
+                self._rebuild_detail()
         else:
-            for p in paths:
-                self._operation_logs[p] = []
-                if self.selected_file and self.selected_file.path == p and self._log_label:
-                    self._log_label.clear()
+            self._rebuild_file_list()
+            self._rebuild_detail()
 
-        client = ui.context.client
         loop = asyncio.get_running_loop()
 
         def _cb(file_path_str, msg):
             p = Path(file_path_str) if file_path_str else None
+            # Always attribute the line to its file so per-file logs stay populated,
+            # and additionally mirror it into the shared multi-push log when relevant.
+            if p:
+                self._enqueue_log(p, msg)
             if is_multi:
-                loop.call_soon_threadsafe(self._add_log, None, msg)
-            else:
-                loop.call_soon_threadsafe(self._add_log, p, msg)
+                self._enqueue_log(None, msg)
 
         async def _run():
+            results = None
+            error = None
             try:
-                await loop.run_in_executor(None, lambda: svc.upload(paths, parent_page_id=parent_page_id, progress_callback=_cb, custom_titles=custom_titles))
+                results = await loop.run_in_executor(
+                    None,
+                    lambda: svc.upload(paths, parent_page_id=parent_page_id, progress_callback=_cb, custom_titles=custom_titles),
+                )
+            except Exception as e:
+                error = e
+            finally:
+                # Stop timer after a short delay to flush remaining queue items
+                await asyncio.sleep(0.5)
+                if self._log_drain_timer:
+                    self._log_drain_timer.cancel()
+                    self._log_drain_timer = None
+                self._active_paths.difference_update(paths)
+                failed_names = [p.name for p, ok, _ in (results or []) if not ok]
+                if is_multi:
+                    self._multi_push_active = False
+                    self._update_push_checked_btn()
+                    with client:
+                        if error:
+                            ui.notify(f"Multi-file push crashed: {error}", type="negative")
+                        elif failed_names:
+                            ui.notify(
+                                f"Multi-file push finished with {len(failed_names)} failure(s): {', '.join(failed_names)}",
+                                type="negative",
+                            )
+                        else:
+                            ui.notify(f"Multi-file push finished ({len(paths)} files)", type="positive")
+                else:
+                    names = ", ".join(p.name for p in paths)
+                    with client:
+                        if error:
+                            ui.notify(f"Push failed for {names}: {error}", type="negative")
+                        elif failed_names:
+                            ui.notify(f"Push failed for {', '.join(failed_names)}", type="negative")
+                        else:
+                            ui.notify(f"Push finished for {names}", type="positive")
                 await self._refresh()
-            except Exception as exc:
-                with client:
-                    ui.notify(f"Upload error: {exc}", type="negative")
 
         asyncio.create_task(_run())
 
@@ -603,35 +691,61 @@ class MainLayout:
         if not info.confluence_url:
             ui.notify("No Confluence URL — use Change ID to set one first", type="warning")
             return
-        # Deferred to avoid importing service modules at UI module load time
         from services.download_service import DownloadService, DownloadScope
         svc = DownloadService(self.config, self.tracker)
+        client = self._detail_container.client
         self._operation_logs[info.path] = []
-        if self._log_label:
-            self._log_label.clear()
+        self._active_paths.add(info.path)
 
-        client = ui.context.client
+        # Clear queue and start drain timer, parented to the stable page client
+        # (not the button's own slot) so it survives the panel rebuild below.
+        while not self._log_queue.empty():
+            self._log_queue.get_nowait()
+        if self._log_drain_timer:
+            self._log_drain_timer.cancel()
+        with client:
+            self._log_drain_timer = ui.timer(0.1, self._drain_log_queue)
+
+        self._rebuild_file_list()
+        self._rebuild_detail()
+
         loop = asyncio.get_running_loop()
 
         def _cb(msg):
-            loop.call_soon_threadsafe(self._add_log, info.path, msg)
+            self._enqueue_log(info.path, msg)
 
         async def _run():
+            result = None
+            error = None
             try:
-                await loop.run_in_executor(
+                result = await loop.run_in_executor(
                     None,
                     lambda: svc.download(info.confluence_url, DownloadScope.SINGLE, info.path.parent,
                                           overwrite=True, progress_callback=_cb),
                 )
-                await self._refresh()
-            except Exception as exc:
+            except Exception as e:
+                error = e
+            finally:
+                await asyncio.sleep(0.5)
+                if self._log_drain_timer:
+                    self._log_drain_timer.cancel()
+                    self._log_drain_timer = None
+                self._active_paths.discard(info.path)
+                ok = result[0] if result else False
                 with client:
-                    ui.notify(f"Download error: {exc}", type="negative")
+                    if error:
+                        ui.notify(f"Pull failed for {info.path.name}: {error}", type="negative")
+                    elif not ok:
+                        msg = result[1] if result else "unknown error"
+                        ui.notify(f"Pull failed for {info.path.name}: {msg}", type="negative")
+                    else:
+                        ui.notify(f"Pull finished for {info.path.name}", type="positive")
+                await self._refresh()
 
         asyncio.create_task(_run())
 
     def _change_id_dialog(self, info):
-        client = ui.context.client
+        client = self._detail_container.client
         with ui.dialog() as dlg, ui.card().classes("w-96 p-6"):
             ui.label("Set Confluence Page ID").classes("text-lg font-bold text-gray-800 dark:text-gray-200")
             new_id = ui.input(
@@ -665,7 +779,7 @@ class MainLayout:
                         "confluence_space": details["confluence_space"],
                         "confluence_page_name": details["confluence_page_name"],
                         "confluence_url": details["confluence_url"],
-                    })
+                    }, update_hash=False)
                     
                     with client:
                         ui.notify(f"Confluence ID updated. Space resolved to '{details['confluence_space']}'", type="positive")
@@ -675,7 +789,7 @@ class MainLayout:
                     self.tracker.write_sync_state(info.path, {
                         "confluence_id": page_id,
                         "confluence_space": fallback_space,
-                    })
+                    }, update_hash=False)
                     
                     with client:
                         ui.notify(
@@ -760,7 +874,9 @@ class MainLayout:
             self.checked_files = {p for p in self.checked_files if p in existing_paths}
             self._update_push_checked_btn()
             self._rebuild_file_list()
-            self._rebuild_detail()
+            # Do not rebuild detail panel during active multi-push to prevent wiping the active log widget instance
+            if not self.multi_push_mode:
+                self._rebuild_detail()
         finally:
             if self._refresh_icon:
                 self._refresh_icon.classes(remove="animate-spin")

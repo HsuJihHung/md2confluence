@@ -21,11 +21,18 @@ def test_upload_calls_subprocess(tmp_path):
     cfg = _make_cfg(tmp_path)
     tracker = MagicMock(spec=FileTracker)
 
-    with patch("services.upload_service.subprocess.run") as mock_run:
+    with patch("services.upload_service.subprocess.run") as mock_run, \
+         patch.object(cfg, "fetch_page_details", return_value={
+             "confluence_page_name": "Hello",
+             "confluence_url": "https://example.com/pages/111",
+             "confluence_space": "TEAM",
+         }):
         mock_run.return_value = MagicMock(returncode=0, stdout="Page ID: 111\n", stderr="")
         svc = UploadService(cfg, tracker)
         results = svc.upload([path])
 
+    # fetch_page_details is mocked (no real network call), so the md2conf
+    # upload invocation is the only call recorded against subprocess.run.
     assert mock_run.called
     cmd_args = mock_run.call_args[0][0]
     assert str(path) in cmd_args
